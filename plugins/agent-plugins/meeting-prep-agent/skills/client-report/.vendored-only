@@ -1,0 +1,6 @@
+# Vendored-only skill -- no plugins/vertical-plugins/ source exists.
+#
+# Upstream removed the source plugin (vertical-plugins/wealth-management, upstream
+# #349) but kept this copy bundled inside meeting-prep-agent/agents/meeting-prep-agent.md.
+# scripts/check.py and scripts/sync-agent-skills.py skip bundles carrying this marker,
+# so this directory is the only copy: edit it here, not in vertical-plugins/.
