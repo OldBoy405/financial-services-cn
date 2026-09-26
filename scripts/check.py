@@ -17,6 +17,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Windows defaults text I/O to the machine's ANSI code page (e.g. cp936), which
+# cannot decode UTF-8 manifests or encode the report glyphs below. Pin the
+# locale-independent encoding for both files and output.
+for _stream in (sys.stdout, sys.stderr):
+    _stream.reconfigure(encoding="utf-8", errors="replace")
+
 ROOT = Path(__file__).resolve().parents[1]
 PLUGINS = ROOT / "plugins"
 MANAGED = ROOT / "managed-agent-cookbooks"
@@ -69,7 +75,7 @@ def rel(p: Path) -> str:
 for yml in sorted(MANAGED.rglob("*.yaml")):
     checked += 1
     try:
-        with open(yml) as f:
+        with open(yml, encoding="utf-8") as f:
             yaml.safe_load(f)
     except yaml.YAMLError as e:
         err(f"YAML parse: {rel(yml)}: {e}")
@@ -84,14 +90,14 @@ for pat in json_globs:
     for jf in sorted(ROOT.glob(pat)):
         checked += 1
         try:
-            json.loads(jf.read_text())
+            json.loads(jf.read_text(encoding="utf-8"))
         except json.JSONDecodeError as e:
             err(f"JSON parse: {rel(jf)}: {e}")
 
 # --- 3. agent.md frontmatter -----------------------------------------------
 for md in sorted(PLUGINS.glob("agent-plugins/*/agents/*.md")):
     checked += 1
-    text = md.read_text()
+    text = md.read_text(encoding="utf-8")
     if not text.startswith("---"):
         err(f"frontmatter: {rel(md)}: missing leading ---")
         continue
@@ -108,7 +114,7 @@ for md in sorted(PLUGINS.glob("agent-plugins/*/agents/*.md")):
 # --- 4. reference resolution -----------------------------------------------
 def check_refs(yml: Path) -> None:
     try:
-        data = yaml.safe_load(yml.read_text()) or {}
+        data = yaml.safe_load(yml.read_text(encoding="utf-8")) or {}
     except yaml.YAMLError:
         return  # already reported above
     base = yml.parent
@@ -143,15 +149,24 @@ for yml in sorted(MANAGED.rglob("*.yaml")):
 import filecmp  # noqa: E402
 import re  # noqa: E402
 
+# Marker file inside plugins/agent-plugins/<slug>/skills/<name>/ meaning "this
+# copy has no vertical-plugins/ source (upstream deleted it), so it cannot be
+# synced or drift-checked". See scripts/sync-agent-skills.py for the other half.
+VENDORED_ONLY_MARKER = ".vendored-only"
+
 src_by_name = {p.name: p for p in PLUGINS.glob("vertical-plugins/*/skills/*") if p.is_dir()}
 for bundled in sorted(PLUGINS.glob("agent-plugins/*/skills/*")):
     if not bundled.is_dir():
         continue
     src = src_by_name.get(bundled.name)
     if not src:
+        # Vendored-only copies opt out with the marker; anything else with no
+        # source is a genuine orphan.
+        if (bundled / VENDORED_ONLY_MARKER).is_file():
+            continue
         err(f"bundled-skill: {rel(bundled)}: no vertical-plugins source named '{bundled.name}'")
         continue
-    cmp = filecmp.dircmp(src, bundled)
+    cmp = filecmp.dircmp(src, bundled, ignore=[VENDORED_ONLY_MARKER])
     if cmp.diff_files or cmp.left_only or cmp.right_only:
         err(
             f"bundled-skill: {rel(bundled)}: drifted from {rel(src)} "
@@ -163,7 +178,9 @@ for md in sorted(PLUGINS.glob("agent-plugins/*/agents/*.md")):
     slug = md.parents[1].name
     sk_dir = PLUGINS / "agent-plugins" / slug / "skills"
     bundle = {p.name for p in sk_dir.iterdir() if p.is_dir()} if sk_dir.is_dir() else set()
-    for ref in set(re.findall(r"`([a-z0-9]+(?:-[a-z0-9]+)+)`", md.read_text())):
+    for ref in set(
+        re.findall(r"`([a-z0-9]+(?:-[a-z0-9]+)+)`", md.read_text(encoding="utf-8"))
+    ):
         if ref in src_by_name and ref not in bundle:
             err(
                 f"agent-prose: {rel(md)}: references `{ref}` but "
@@ -172,7 +189,7 @@ for md in sorted(PLUGINS.glob("agent-plugins/*/agents/*.md")):
 
 # --- 4c. marketplace source paths resolve ----------------------------------
 mp = ROOT / ".claude-plugin" / "marketplace.json"
-for p in json.loads(mp.read_text()).get("plugins", []):
+for p in json.loads(mp.read_text(encoding="utf-8")).get("plugins", []):
     src = (ROOT / p["source"]).resolve()
     if not (src / ".claude-plugin" / "plugin.json").is_file():
         err(f"marketplace: {p['name']} source -> {p['source']} (no plugin.json)")

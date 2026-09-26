@@ -74,7 +74,10 @@ def plugin_root(plugin_json: Path) -> Path:
 
 
 def rel(p: Path) -> str:
-    return str(p.relative_to(ROOT))
+    # POSIX form: this string is interpolated into git arguments and ref logs
+    # (e.g. "<base>:plugins\...\plugin.json"), where backslashes are not
+    # path separators -- on Windows the ref lookup would silently fail.
+    return p.relative_to(ROOT).as_posix()
 
 
 def parse_semver(v: str) -> tuple[int, int, int] | None:
@@ -109,7 +112,7 @@ def base_version(base: str, plugin_json: Path) -> str | None:
 
 def working_version(plugin_json: Path) -> str | None:
     try:
-        return json.loads(plugin_json.read_text()).get("version")
+        return json.loads(plugin_json.read_text(encoding="utf-8")).get("version")
     except (OSError, json.JSONDecodeError):
         return None
 
@@ -153,9 +156,11 @@ def cmd_apply(base: str) -> int:
         if is_ahead(work, bv):
             continue  # already bumped on this branch — idempotent no-op
         new = patch_bump(bv or work or "0.0.0")
-        data = json.loads(pj.read_text())
+        data = json.loads(pj.read_text(encoding="utf-8"))
         data["version"] = new
-        pj.write_text(json.dumps(data, indent=2) + "\n")
+        # ensure_ascii=False keeps non-ASCII (e.g. localized) descriptions as-is
+        # instead of rewriting them into \uXXXX escapes on every bump.
+        pj.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         git("add", rel(pj))
         bumped.append((rel(plugin_root(pj)), bv, new))
 

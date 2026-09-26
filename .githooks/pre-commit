@@ -10,9 +10,18 @@ set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "[pre-commit] python3 not found; skipping version-bump." >&2
+# Pick the first interpreter that actually runs: on Windows `command -v python3`
+# also matches the WindowsApps app-execution-alias stub, which fails silently.
+PY=""
+for cand in python3 python; do
+  if command -v "$cand" >/dev/null 2>&1 && "$cand" -c '' >/dev/null 2>&1; then
+    PY="$cand"
+    break
+  fi
+done
+if [ -z "$PY" ]; then
+  echo "[pre-commit] no working python3/python on PATH; skipping version-bump." >&2
   exit 0
 fi
 
-python3 "$REPO_ROOT/scripts/version_bump.py" --apply
+"$PY" "$REPO_ROOT/scripts/version_bump.py" --apply

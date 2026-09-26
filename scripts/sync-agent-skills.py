@@ -17,6 +17,10 @@ ROOT = Path(__file__).resolve().parents[1]
 AGENTS = ROOT / "plugins" / "agent-plugins"
 VERTICALS = ROOT / "plugins" / "vertical-plugins"
 
+# Same marker check.py honours: a bundle whose vertical source was deleted
+# upstream. Nothing to sync from, and the copy is authoritative.
+VENDORED_ONLY_MARKER = ".vendored-only"
+
 # index every skill name -> source dir in verticals
 src_by_name: dict[str, Path] = {}
 for sk in VERTICALS.glob("*/skills/*"):
@@ -30,6 +34,8 @@ for bundled in sorted(AGENTS.glob("*/skills/*")):
         continue
     src = src_by_name.get(bundled.name)
     if not src:
+        if (bundled / VENDORED_ONLY_MARKER).is_file():
+            continue
         missing.append(str(bundled.relative_to(ROOT)))
         continue
     shutil.rmtree(bundled)

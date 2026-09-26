@@ -51,7 +51,7 @@ def sub(m):
     if not SAFE.fullmatch(v):
         sys.exit(f"refusing ${{{name}}}: value contains characters outside [A-Za-z0-9._/:@-]")
     return v
-t = open(sys.argv[1]).read()
+t = open(sys.argv[1], encoding="utf-8").read()
 t = re.sub(r"\$\{([A-Z0-9_]+)\}", sub, t)
 json.dump(yaml.safe_load(t), sys.stdout)
 ' "$1"

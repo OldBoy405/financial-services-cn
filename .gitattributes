@@ -1,0 +1,5 @@
+# Shell scripts are executed by bash/sh, which cannot parse CRLF: a \r becomes
+# part of the command (e.g. "python3\r: command not found"). Force LF on checkout
+# regardless of the machine core.autocrlf setting.
+.githooks/* text eol=lf
+*.sh text eol=lf
