@@ -93,7 +93,7 @@ class ExportAndHost(RepoTest):
         self.assertEqual(len(manifest["quickPrompts"]), 3)
         self.assertEqual(len(manifest["tags"]), 3)
         first = manifest["quickPrompts"][0]
-        self.assertEqual(manifest["defaultInitPrompt"], first["cn"],
+        self.assertEqual(manifest["defaultInitPrompt"], first,
                          "defaultInitPrompt must equal the first quickPrompt")
         self.assertEqual(list(manifest["dependencies"]["connectors"]), EXPECTED_CONNECTORS)
         for key in FORBIDDEN_KEYS:

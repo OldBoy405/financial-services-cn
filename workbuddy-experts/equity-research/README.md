@@ -250,21 +250,27 @@ acceptance-method: cmd-02 核对本行；cmd-05 用 CN/EN 请求核对唯一技�
 <!-- sample-index:start -->
 ```yaml
 sample-id: SAMPLE-01
-status: 待确认
-securities-code: ""
-exchange: ""
-disclosure-date: ""
-verified-at: ""
-source-and-version: ""
-selection-rationale: ""
+status: 已核实
+securities-code: "603599"
+exchange: SH
+disclosure-date: 2026-04-27
+verified-at: 2026-09-28
+source-and-version: 巨潮资讯网，2025 年年报原件（广信股份 2026-04-27 披露）
+selection-rationale: 公司简单经营健康
 original-relative-path: out/samples/SAMPLE-01/
-original-files: []
+original-files: [out/samples/SAMPLE-01/603599_20260427_SSAP.pdf::473cac8783fe3f971a036f6819be5ddbb59745f288603921202137ead64df226]
 conditions:
-  latest-complete-disclosure: 待确认
-  research-coverage-sufficient: 待确认
-  wind-queryable: 待确认
-  legal-usage-right: 待确认
-adjudicator: ""
+  latest-complete-disclosure: 已核实
+  research-coverage-sufficient: 已核实
+  wind-queryable: 已核实
+  legal-usage-right: 已核实
+conditions-evidence:
+  latest-complete-disclosure: 巨潮资讯网 2026-04-27 披露的 2025 年年报，原件落盘 out/samples/SAMPLE-01/603599_20260427_SSAP.pdf（SHA-256 见 original-files）
+  research-coverage-sufficient: 近半年覆盖研报超过 10 篇，最近一份 2026-08-25，来源慧博检索页（research-page）
+  wind-queryable: 2026-09-28 在慧博（hibor.com.cn）检索到该标的该期报告；实际可复核渠道为慧博而非 Wind，按实际渠道如实记录（research-page）
+  legal-usage-right: 交易所公开披露渠道取得的公开文件，允许本机自用
+research-page: https://www.hibor.com.cn/newweb/HuiSou/s?gjc=广信股份&sslb=1&sjfw=24&cxzd=qb%28qw%29&px=zh&bgys=&gs=&sdhy=&sdgs=&sdhgcl=&mhss=&hy=&gp=
+adjudicator: Ray
 ```
 <!-- sample-index:end -->
 
@@ -272,14 +278,16 @@ adjudicator: ""
 
 | 条件 | 需要的可复核依据 | 当前状态 | 裁决人 |
 |---|---|---|---|
-| 最近完整披露 | 定期报告披露日期与完整报告原文位置（披露平台 + 日期） | 待确认 | Ray |
-| 研报覆盖充分 | 覆盖该标的的研报数量与最近一份研报日期及来源 | 待确认 | Ray |
-| Wind 可查 | Wind 终端可检索到该标的对应报告期的核验记录 | 待确认 | Ray |
-| 合法使用权 | 样例原件使用权的可核查依据（不依赖机构连接器许可） | 待确认 | Ray |
+| 最近完整披露 | 定期报告披露日期与完整报告原文位置（披露平台 + 日期） | 已核实：巨潮资讯网 2026-04-27 披露 2025 年年报，原件在 `out/samples/SAMPLE-01/` | Ray |
+| 研报覆盖充分 | 覆盖该标的的研报数量与最近一份研报日期及来源 | 已核实：近半年超过 10 篇，最近 2026-08-25，来源慧博检索页 | Ray |
+| 研报可查 | 检索日期 + 在可复核渠道检索到该标的对应报告期的记录 | 已核实：2026-09-28 在慧博（hibor.com.cn）检索到该标的该期报告 | Ray |
+| 合法使用权 | 样例原件使用权的可核查依据（不依赖机构连接器许可） | 已核实：交易所公开披露渠道取得的公开文件，允许本机自用 | Ray |
 
-**原件位置与版本化边界**：样例原件只放 `.gitignore` 覆盖的 `out/` 独立样例区（相对路径 `out/samples/SAMPLE-01/`），**不**提交原件、**不**复制进分发包、**不**版本化商业正文；本索引只保存上述元数据与证据定位。`original-files` 每项格式为 `<包内相对路径>::<sha256>`（相对样例区），四项条件核实为 `已核实` 并填 `adjudicator` 后才可判样例通过。
+说明：第三项条件在本索引中的机器键名沿用 `wind-queryable`（测试接口常量），但实际可复核渠道是**慧博**（hibor.com.cn）而非 Wind 终端；按「如实记录、不伪称渠道」原则，证据与上表均按慧博记载。检索页链接见上方机器块 `research-page`。
 
-**当前事实**：CR worktree 内不存在 `out/samples/` 目录，也没有 Ray 提供的四条件与使用权证据；因此本索引保持 `待确认`，`cmd-03` 保持非零失败，AC-03 不通过，本 CR 不得最终通过或把样例作为已验收产物交接。
+**原件位置与版本化边界**：样例原件只放 `.gitignore` 覆盖的 `out/` 独立样例区（相对路径 `out/samples/SAMPLE-01/`），**不**提交原件、**不**复制进分发包、**不**版本化商业正文；本索引只保存上述元数据与证据定位。`original-files` 每项格式为 `<仓库根相对路径>::<sha256>`，四项条件核验为 `已核实` 且 `adjudicator` 已填（Ray，2026-09-28）。
+
+**当前事实**：Ray 已于 2026-09-28 提供样例原件与四条件逐项依据（见本节机器块与核验表），`out/samples/SAMPLE-01/603599_20260427_SSAP.pdf` 已落盘并登记 SHA-256；`cmd-03` 按 AC-03 复核原件、哈希与四项裁决。
 
 ---
 
@@ -288,3 +296,11 @@ adjudicator: ""
 - `westock-data`、`westock-tool` 是**数据域路由名**（Agent 层，见 §3.3 表）；`westock-mcp` 是 **manifest 连接器 ID**（宿主层）。两者不同层，不互相重命名、不假设等价；目标平台校验冲突时按合同阻断上报。
 - manifest 不含 `teamInfo`、`dependencies.mcpServers`、旧 `tools:` 字段、`.mcp.json`、美系 MCP、开发机绝对路径或凭据；不含 `commands/`。
 - 研究内容质量（九项）在本 CR 始终为 `待测`；路由命中不提升研究质量状态。
+
+## 5. 导出与宿主联调记录（G4，2026-09-29）
+
+- **真实导出成功**：`python scripts/export_workbuddy_experts.py --repo-root .` → 24 file(s)，0.06s，输出忽略区 `out/workbuddy-experts/equity-research/`；manifest 与 Agent、README、头像、九个完整技能目录（含 references/assets）齐备，无 ACCEPTANCE/tests/样例原件。
+- **manifest 按目标校验器实际 schema 校正**（validate_expert.py 5.5.6-wb.38337834.g5f969292.h7826dc9400fd）：i18n 字段（`displayName`/`profession`/`displayDescription`/`defaultInitPrompt`/`quickPrompts`/`tags`）为 `{zh,en}` 对象、新增目标必填 `description` 字段（SDD §3.1 认可）、`categoryId=08-FinanceInvestment`（目标 12 枚举之一）；`defaultInitPrompt` 与第一条 quickPrompt 逐字相等。四连接器 ID 声明不变；校验器无连接器 ID 检查项。
+- **头像追溯**：`avatars/expert.png`（PNG 500×610、307,262 字节、SHA-256 `616fd6bbe88fd811ecbb97defb7bbe815c5c9c05368bc33569341e43877f3897`），来源/授权方 Ray 本人（自绘授权），范围可随包分发；装进客户端后的专家中心渲染目视验收留观。
+- **宿主回执**：`out/evidence/host/index.json`（client WorkBuddy 37.10.3-24；validate-installed exit 0、register exit 0、package exit 0 → `out/dist/equity-research.zip` 24 files/429.2KB；各步原始日志含 sha256）。安装位：`~/.workbuddy/plugins/marketplaces/my-experts/plugins/equity-research`，marketplace.json 已登记。
+- **未完成（下一轮）**：客户端召唤与 18 条 CN/EN 正例 + 负例会话采集（cmd-05/06 动态证据），需 WorkBuddy GUI 交互。

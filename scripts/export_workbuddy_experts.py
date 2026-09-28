@@ -174,8 +174,9 @@ def load_manifest(pkg_src: Path) -> dict:
     if len(list(manifest.get("tags") or [])) != 3:
         raise ExportError("manifest must declare exactly 3 tags")
     first = prompts[0]
-    first_text = first.get("cn") if isinstance(first, dict) else first
-    if manifest.get("defaultInitPrompt") != first_text:
+    # Target schema (validator 5.5.6): defaultInitPrompt is an i18n object and must
+    # equal the first quickPrompt entry ("与第一条 quickPrompt 相同", SDD §3.1).
+    if manifest.get("defaultInitPrompt") != first:
         raise ExportError("defaultInitPrompt must equal the first quickPrompt")
     connectors = list((manifest.get("dependencies") or {}).get("connectors") or [])
     if connectors != list(EXPECTED_CONNECTORS):

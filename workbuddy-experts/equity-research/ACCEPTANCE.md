@@ -11,7 +11,7 @@
 | 分栏 | 状态 | 证据定位 | 裁决人 |
 |---|---|---|---|
 | 基线（HEAD/tag/trunk/16 结构/九入口） | 待测 | `README.md` §1 + `test-evidence/cmd-01.log` | Ray |
-| 固定样例（四条件 + 合法使用权） | 待确认 | `README.md` §3（原件在忽略区 `out/samples/SAMPLE-01/`） | Ray |
+| 固定样例（四条件 + 合法使用权） | 已核实 | `README.md` §3（原件在忽略区 `out/samples/SAMPLE-01/`，Ray 裁决 2026-09-28） | Ray |
 | 包校验 / 本机安装 / 召唤 | 待测 | `test-evidence/cmd-07.log` + 目标版 `expert-manager` 原始回执（见 §3） | Ray |
 | 路由（九技能 CN/EN + 守卫 + quickPrompts） | 待测 | `test-evidence/cmd-05.log`、`cmd-06.log` + 客户端会话记录（见 §4） | Ray |
 | 研究质量（九项内容/产物） | 待测 | 不在本 CR 范围（后续 CR） | Ray |
@@ -181,13 +181,13 @@ research-state: 待测
 
 | 项 | 期望记录 | 当前值 |
 |---|---|---|
-| 目标客户端名称与版本 | 版本号 + 来源 | 待记录 |
-| `expert-manager` 校验器版本与路径 | 版本 + 可执行位置 | **未建立**（本机未发现 `expert-manager`，见 `test-evidence/cmd-07.log`） |
-| init/validate/register 步骤与原始输出 | 实际命令 + 完整输出 | 待记录 |
-| 本机安装与召唤观察 | 界面/CLI 实际观察 | 待记录 |
-| author 邮箱、头像来源与授权 | 授权依据 + SHA-256 | 待 Ray 提供 |
+| 目标客户端名称与版本 | 版本号 + 来源 | **WorkBuddy 37.10.3-24**（`D:\Program Files (x86)\WorkBuddy\version`，2026-09-29 读取） |
+| `expert-manager` 校验器版本与路径 | 版本 + 可执行位置 | **skill-expert-manager 5.5.6-wb.38337834.g5f969292.h7826dc9400fd**（user scope：`C:\Users\GOBAO\.workbuddy\plugins\cache\workbuddy-builtin\skill-expert-manager\5.5.6-…\scripts`） |
+| init/validate/register 步骤与原始输出 | 实际命令 + 完整输出 | `out/evidence/host/index.json`（steps + 原始日志 sha256）：validate-installed exit 0（`Expert package is valid!`）、register exit 0（写入 `my-experts/.codebuddy-plugin/marketplace.json`）、package exit 0（24 files → `out/dist/equity-research.zip`）；导出暂存区预装校验 exit 1 为安装前置事实（校验器要求专家位于宿主专家目录下） |
+| 本机安装与召唤观察 | 界面/CLI 实际观察 | 安装：包已复制到 `~/.workbuddy/plugins/marketplaces/my-experts/plugins/equity-research` 并注册可见；召唤：需 WorkBuddy GUI 交互（专家中心发起会话），留待 Ray 与 cmd-05/06 会话采集同轮执行 |
+| author 邮箱、头像来源与授权 | 授权依据 + SHA-256 | author：OldBoy405 <403562935@qq.com>（Ray 2026-09-28 确认）；头像：Ray 本人自绘、可随包分发，PNG 500×610、307,262 字节、SHA-256 `616fd6bb…f3897`（完整值见 `out/evidence/host/index.json` `avatar-authorization`） |
 
-当前环境事实：本机未发现 `expert-manager` 可执行文件，且 `avatars/expert.png` 需要真实获授权资产；按 TASK-04 与 plan.md 即时 readiness 口径，宿主验证保持 `ENVIRONMENT_MISMATCH` 阻断，不用自制校验器替代。
+manifest 已按目标校验器 5.5.6 实际 schema 校正：i18n 字段（displayName/profession/displayDescription/defaultInitPrompt/quickPrompts/tags）改 `{zh,en}` 对象、新增 `description` 字段、`categoryId` 取 `08-FinanceInvestment`（12 个合法枚举之一）；`defaultInitPrompt` 与第一条 quickPrompt 逐字相等（SDD §3.1「与第一条 quickPrompt 相同」语义在目标 schema 形态下保持）。校验遗留 1 条非阻断 warning：displayDescription.zh 100 字符（建议 40-50）。
 
 ---
 

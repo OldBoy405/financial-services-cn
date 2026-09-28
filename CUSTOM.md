@@ -47,7 +47,7 @@
 | #7 | `scripts/version_bump.py` | 文本读写显式 UTF-8，写回保留非 ASCII 描述；Git 路径改 POSIX 分隔符，修复 Windows 下基线 `git show <ref>:<path>` 静默失败导致从不 bump。 | 上游改版本比较或基线策略时保留跨平台路径正确性。验证：`python scripts/version_bump.py --check --base main`；在暂存插件变更时确认 hook 只 bump 一次。 |
 | #8 | `scripts/validate.py`、`scripts/deploy-managed-agent.sh` | JSON/YAML 和部署脚本内嵌 Python 读文件显式 UTF-8，避免 Windows ANSI 默认解码。 | 上游增加新的文件读取点时沿用显式编码；部署验证需在具备 `jq` 与凭据的环境另测，当前不宣称已部署。验证：`check.py`，有管理代理变更时再跑对应校验/部署 dry run。 |
 | #9 | `plugins/vertical-plugins/equity-research/skills/*/SKILL.md`（9 个）、`plugins/vertical-plugins/equity-research/commands/*.md`（9 个）、本文件《WB-CUSTOM 本地化明细（CR-2026-001）》节 | CR-2026-001 的 A股/港股本地化：每文件加 `WB-CUSTOM` 块（输入契约、数据域、保留旧约束、中文等价口径、明确缺口、安全停机），并改写 `/earnings` 与 `/initiate` 的美元/SEC/EDGAR/美系数据源假设；记录号 `WB-CUSTOM-01`～`WB-CUSTOM-18`。 | 上游动同一文件时按本节《本地化增量合并规则》三方比对；不得把 CNY/交易所披露页改回 USD/EDGAR。验证：`python scripts/check.py`、`python -m unittest discover -s workbuddy-experts/equity-research/tests -p test_04_localization.py`；源改后运行 `python scripts/sync-agent-skills.py` 再复核副本一致。 |
-| #10 | `workbuddy-experts/equity-research/`、`scripts/export_workbuddy_experts.py` | CR-2026-001 新增 WorkBuddy 专家包源（manifest/Agent/README/ACCEPTANCE）与标准库导出脚本；导出物只落忽略区 `out/workbuddy-experts/equity-research/`。 | 新文件与上游源隔离，上游不新增同名路径即无冲突；若上游提供等价专家包能力，先比对语义再选真源。验证：`python scripts/export_workbuddy_experts.py`（缺头像/缺技能非零且不留残包）、`test_07_export_host.py`。当前头像与宿主校验未就绪，导出尚未成功，不记为已完成。 |
+| #10 | `workbuddy-experts/equity-research/`、`scripts/export_workbuddy_experts.py` | CR-2026-001 新增 WorkBuddy 专家包源（manifest/Agent/README/ACCEPTANCE，头像由 Ray 提供并授权随包分发：PNG 500×610、307,262 字节、SHA-256 `616fd6bb…f3897`）与标准库导出脚本；manifest 按目标校验器 5.5.6 实际 schema 校正（i18n 字段 `{zh,en}`、新增 `description`、`categoryId=08-FinanceInvestment`）；导出物只落忽略区 `out/workbuddy-experts/equity-research/`。 | 新文件与上游源隔离，上游不新增同名路径即无冲突；若上游提供等价专家包能力，先比对语义再选真源。验证：`python scripts/export_workbuddy_experts.py`（2026-09-29 实测成功：24 files/0.06s）、宿主回执 `out/evidence/host/index.json`（validate exit 0、register exit 0、package exit 0 → `out/dist/equity-research.zip`）。客户端召唤与 18 条会话采集未完成，不记为已完成。 |
 
 新增二开：先在此表追加路径、原因和可运行的最小验收，再合并上游；同一事项改路径时更新原行，ID 保持不变。删除/上游化时保留原行并注明日期及替代版本，避免下轮误恢复。
 
@@ -114,5 +114,5 @@
 ## 尚未实施（别把计划算进台账完成项）
 
 - 二级市场研究 9 技能的 A股/港股本地化（深改 `earnings-analysis`、`initiating-coverage`；中改 `catalyst-calendar`、`earnings-preview`、`morning-note`、`idea-generation`；轻改 `thesis-tracker`、`sector-overview`、`model-update`）：**源码级本地化已由 CR-2026-001 实施**（`#9` + 《WB-CUSTOM 本地化明细》），源文件带 `WB-CUSTOM` 标记、10 文本改动的具名副本经同步脚本重建；验收（cmd-04 及人工抽查）随 CR 评审闭合，未闭合前不记为已完成。
-- `workbuddy-experts/equity-research/`、导出脚本、目标环境验收/发布：包源与导出脚本已落盘（`#10`），但**导出尚未成功**（缺 Ray 提供的获授权头像 `avatars/expert.png`）、目标 `expert-manager` 与本机安装/召唤证据未建立，宿主验收保持阻断；不得记为已完成。
+- `workbuddy-experts/equity-research/`、导出脚本、目标环境验收/发布：包源、获授权头像（Ray 自绘、可随包分发）与导出脚本已落盘（`#10`），2026-09-29 真实导出成功（24 files），目标校验器 5.5.6 在安装位校验通过、注册与打包回执落 `out/evidence/host/index.json`；**客户端召唤与 18 条 CN/EN 会话/负例采集仍未完成**（需 WorkBuddy GUI 交互），验收未闭合前不记为已完成。
 - 双周同步是维护节奏，不是已部署的定时器；每轮以《同步记录》中的实测结果为准。
