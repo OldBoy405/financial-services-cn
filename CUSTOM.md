@@ -46,8 +46,60 @@
 | #6 | `plugins/agent-plugins/meeting-prep-agent/skills/{client-report,client-review,investment-proposal}/.vendored-only`、同插件 `.claude-plugin/plugin.json` | 上游 #349 删除 `wealth-management` vertical 真源但保留这三个 agent bundle；标记唯一副本以保留 agent 工作流，插件版本按仓库规则从 0.1.1 升至 0.1.2。 | 不直接删除这些技能来消警；上游恢复/替代功能时重新判定真源。验证：`check.py` + `version_bump.py --check --base main`，核对 agent 仍引用三项技能。 |
 | #7 | `scripts/version_bump.py` | 文本读写显式 UTF-8，写回保留非 ASCII 描述；Git 路径改 POSIX 分隔符，修复 Windows 下基线 `git show <ref>:<path>` 静默失败导致从不 bump。 | 上游改版本比较或基线策略时保留跨平台路径正确性。验证：`python scripts/version_bump.py --check --base main`；在暂存插件变更时确认 hook 只 bump 一次。 |
 | #8 | `scripts/validate.py`、`scripts/deploy-managed-agent.sh` | JSON/YAML 和部署脚本内嵌 Python 读文件显式 UTF-8，避免 Windows ANSI 默认解码。 | 上游增加新的文件读取点时沿用显式编码；部署验证需在具备 `jq` 与凭据的环境另测，当前不宣称已部署。验证：`check.py`，有管理代理变更时再跑对应校验/部署 dry run。 |
+| #9 | `plugins/vertical-plugins/equity-research/skills/*/SKILL.md`（9 个）、`plugins/vertical-plugins/equity-research/commands/*.md`（9 个）、本文件《WB-CUSTOM 本地化明细（CR-2026-001）》节 | CR-2026-001 的 A股/港股本地化：每文件加 `WB-CUSTOM` 块（输入契约、数据域、保留旧约束、中文等价口径、明确缺口、安全停机），并改写 `/earnings` 与 `/initiate` 的美元/SEC/EDGAR/美系数据源假设；记录号 `WB-CUSTOM-01`～`WB-CUSTOM-18`。 | 上游动同一文件时按本节《本地化增量合并规则》三方比对；不得把 CNY/交易所披露页改回 USD/EDGAR。验证：`python scripts/check.py`、`python -m unittest discover -s workbuddy-experts/equity-research/tests -p test_04_localization.py`；源改后运行 `python scripts/sync-agent-skills.py` 再复核副本一致。 |
+| #10 | `workbuddy-experts/equity-research/`、`scripts/export_workbuddy_experts.py` | CR-2026-001 新增 WorkBuddy 专家包源（manifest/Agent/README/ACCEPTANCE）与标准库导出脚本；导出物只落忽略区 `out/workbuddy-experts/equity-research/`。 | 新文件与上游源隔离，上游不新增同名路径即无冲突；若上游提供等价专家包能力，先比对语义再选真源。验证：`python scripts/export_workbuddy_experts.py`（缺头像/缺技能非零且不留残包）、`test_07_export_host.py`。当前头像与宿主校验未就绪，导出尚未成功，不记为已完成。 |
 
 新增二开：先在此表追加路径、原因和可运行的最小验收，再合并上游；同一事项改路径时更新原行，ID 保持不变。删除/上游化时保留原行并注明日期及替代版本，避免下轮误恢复。
+
+## WB-CUSTOM 本地化明细（CR-2026-001）
+
+本节是 CR-2026-001 对 `equity-research` 源技能/命令的本地化台账（对应《定制明细》`#9`），遵守本文件既有总则：台账先行、源优先于副本、逐条审查上游更新。
+
+### 上游基线
+
+- 上游仓库：`https://github.com/anthropics/financial-services.git`（remote `upstream`，按约定只拉取）
+- 上游 ref：`upstream/main`；40 位 HEAD：`574ed3624aebd0418c7e96cd101262f30210ab26`
+- baseline tag：`baseline/upstream-574ed36`（附注 tag 对象 `6ca92532bb7cb43fdb9ef0a61411a4cab2b2070e`），解析后 SHA = `574ed3624aebd0418c7e96cd101262f30210ab26`（与上游 HEAD 相同）
+- 比对来源：`workbuddy/main` = `574ed36…` + 本地提交 `e03543279019854bb2b14be5aa249d22516ce98f`；仅作后续上游提交的比对来源，不是本 CR 源基线
+- 证据定位：`workbuddy-experts/equity-research/README.md` §1 基线 + `change-requests/CR-2026-001/test-evidence/cmd-01.log`
+
+### 变更清单
+
+| 记录 | 上游来源（ref@SHA:路径） | 原路径 → 本地路径 | 原语义 → 中文等价及保留约束 | 同步副本 | 上游增量/冲突处理 |
+|---|---|---|---|---|---|
+| WB-CUSTOM-01 | `baseline/upstream-574ed36@574ed36:plugins/vertical-plugins/equity-research/skills/earnings-analysis/SKILL.md` | `…/skills/earnings-analysis/SKILL.md` → 同路径（原地本地化） | 10-Q + SEC EDGAR → 交易所定期报告/巨潮资讯/港交所披露易；Bloomberg/FactSet 一致预期 → 境内可得来源并标注日期口径；USD → CNY/HKD；Times New Roman 字体锚 → 中文宋体/黑体；篇幅锚 → 3,000-5,000 中文汉字。**保留** 8-12 页、8-12 图、1-3 摘要表、beat/miss 量化、24-48 小时时效、引用与 Sources 清单、DOCX 交付、八项质检 | `plugins/agent-plugins/earnings-reviewer/skills/earnings-analysis/`（同步脚本生成） | 按本节《本地化增量合并规则》三方比对；冲突交 Ray 裁决，禁止覆写本地化约束 |
+| WB-CUSTOM-02 | `baseline/upstream-574ed36@574ed36:plugins/vertical-plugins/equity-research/skills/initiating-coverage/SKILL.md` | `…/skills/initiating-coverage/SKILL.md` → 同路径 | Task 表与估值口径 → A/H：证券代码+交易所、定期报告或财务数据访问、Task 3 缺 Task 2 模型停机索取、目标价 CNY/HKD、中文交付；SEC/EDGAR → 交易所披露平台。**保留** `⚠️ CRITICAL: One Task at a Time`（五次独立人工关口）、前置输入核验协议、五份产物类别、不额外产出完成总结类文档 | 无上游同名的具名副本（该技能未被 agent-plugin 捆绑） | 同上 |
+| WB-CUSTOM-03 | `baseline/upstream-574ed36@574ed36:plugins/vertical-plugins/equity-research/skills/model-update/SKILL.md` | `…/skills/model-update/SKILL.md` → 同路径 | GAAP/调整后 → 扣非/归母并列；美元与美系一致预期 → CNY/HKD 与境内来源。**保留** 只在明确驱动事件下更新、记录改动理由与前后估算、不覆盖历史版本 | `plugins/agent-plugins/earnings-reviewer/skills/model-update/` | 同上 |
+| WB-CUSTOM-04 | `baseline/upstream-574ed36@574ed36:plugins/vertical-plugins/equity-research/skills/idea-generation/SKILL.md` | `…/skills/idea-generation/SKILL.md` → 同路径 | 美系 screener 字段 → A/H 可得字段；工具分层 → `westock-tool` → `tdx-connector`/`wind-finance`，等价未核实即停。**保留** 候选清单与理由、来源标注、不把筛选当结论 | `plugins/agent-plugins/market-researcher/skills/idea-generation/` | 同上 |
+| WB-CUSTOM-05 | `baseline/upstream-574ed36@574ed36:plugins/vertical-plugins/equity-research/skills/catalyst-calendar/SKILL.md` | `…/skills/catalyst-calendar/SKILL.md` → 同路径 | 美系日历与美元事件金额 → 境内公告日历 + 宏观日历 + CNY/HKD；新增 A/H 机制对照（披露排期、预告窗口、解禁日、股东大会、LPR/国常会）。**保留** 影响分级色标、归档实际结果、默认自选股覆盖 | 无上游同名的具名副本 | 同上 |
+| WB-CUSTOM-06 | `baseline/upstream-574ed36@574ed36:plugins/vertical-plugins/equity-research/skills/morning-note/SKILL.md` | `…/skills/morning-note/SKILL.md` → 同路径 | 美元指数/外盘栏目 → 以 A/H 为主、外盘为参考并标注来源；交易时段差异说明；盘前/盘后与资金域覆盖缺口标注。**保留** 简洁早报体裁与三类栏目 | `plugins/agent-plugins/earnings-reviewer/skills/morning-note/` | 同上 |
+| WB-CUSTOM-07 | `baseline/upstream-574ed36@574ed36:plugins/vertical-plugins/equity-research/skills/earnings-preview/SKILL.md` | `…/skills/earnings-preview/SKILL.md` → 同路径 | 美元预期与美系一致预期 → CNY/HKD 与境内来源（标注日期口径）；驱动事件 → 预约披露日/业绩预告/快报。**保留** bull/base/bear 情景、关键指标清单、不含已发布结果 | 无上游同名的具名副本 | 同上 |
+| WB-CUSTOM-08 | `baseline/upstream-574ed36@574ed36:plugins/vertical-plugins/equity-research/skills/sector-overview/SKILL.md` | `…/skills/sector-overview/SKILL.md` → 同路径 | 美元市场规模与美系行业分类 → CNY/HKD + 境内统计口径与行业分类（标注映射差异）。**保留** 四段结构、概览/深挖两档深度 | `plugins/agent-plugins/market-researcher/skills/sector-overview/`、`plugins/agent-plugins/pitch-agent/skills/sector-overview/`（同步脚本生成） | 同上 |
+| WB-CUSTOM-09 | `baseline/upstream-574ed36@574ed36:plugins/vertical-plugins/equity-research/skills/thesis-tracker/SKILL.md` | `…/skills/thesis-tracker/SKILL.md` → 同路径 | 美元目标价/止损 → CNY（A 股）/HKD（H 股）；英文晨会/投委会格式 → 中文等价模板；数据点来源 → 定期报告/公告/政策事件。**保留** 计分卡、更新日志字段、催化剂日历、季度复核、可证伪性 | 无上游同名的具名副本 | 同上 |
+| WB-CUSTOM-10 | `baseline/upstream-574ed36@574ed36:plugins/vertical-plugins/equity-research/commands/earnings.md` | `…/commands/earnings.md` → 同路径 | Step 1/2/3 输入与来源 → 证券代码+交易所、报告期、定期报告/业绩预告、境内一致预期；金额与评级 → CNY + A 股五档；Sources 段 → 交易所披露页替代 EDGAR。**保留** 发布后三个月时效、transcript 日期核对、beat/miss 量化、8-12 图、8-12 页、八项质检、DOCX+Summary、引文与超链接要求；篇幅锚 → 3,000-5,000 中文汉字 | 命令文本不进入 agent-plugin 副本（副本只同步 `skills/`） | 同上 |
+| WB-CUSTOM-11 | `baseline/upstream-574ed36@574ed36:plugins/vertical-plugins/equity-research/commands/initiate.md` | `…/commands/initiate.md` → 同路径 | 触发与输入追问 → 证券代码+交易所、Task 序号、前序产物。**保留** 每次只执行一个 Task、Task 3 缺 Task 2 模型停机、逐步等待用户 | 同上（无副本） | 同上 |
+| WB-CUSTOM-12 | `baseline/upstream-574ed36@574ed36:plugins/vertical-plugins/equity-research/commands/model-update.md` | `…/commands/model-update.md` → 同路径 | 输入 → 证券代码+交易所、驱动事件、扣非/归母口径、来源与授权。**保留** 更新需明确驱动事件、改动留痕 | 同上（无副本） | 同上 |
+| WB-CUSTOM-13 | `baseline/upstream-574ed36@574ed36:plugins/vertical-plugins/equity-research/commands/screen.md` | `…/commands/screen.md` → 同路径 | 筛选条件 → A/H 可得字段与筛选口径；等价口径未核实即停。**保留** 方向/行业/风格/主题追问 | 同上（无副本） | 同上 |
+| WB-CUSTOM-14 | `baseline/upstream-574ed36@574ed36:plugins/vertical-plugins/equity-research/commands/catalysts.md` | `…/commands/catalysts.md` → 同路径 | 默认时间窗与事件类型 → A/H 公告日历/解禁/股东大会/LPR 等；预计事件须标注「预计」。**保留** 默认未来两周与覆盖范围 | 同上（无副本） | 同上 |
+| WB-CUSTOM-15 | `baseline/upstream-574ed36@574ed36:plugins/vertical-plugins/equity-research/commands/morning-note.md` | `…/commands/morning-note.md` → 同路径 | 栏目 → A/H 为主、外盘为参考；交易时段差异说明；资金域覆盖缺口标注。**保留** 简洁早报体裁 | 同上（无副本） | 同上 |
+| WB-CUSTOM-16 | `baseline/upstream-574ed36@574ed36:plugins/vertical-plugins/equity-research/commands/earnings-preview.md` | `…/commands/earnings-preview.md` → 同路径 | 输入 → 证券代码+交易所、报告期、一致预期口径。**保留** bull/base/bear 情景 | 同上（无副本） | 同上 |
+| WB-CUSTOM-17 | `baseline/upstream-574ed36@574ed36:plugins/vertical-plugins/equity-research/commands/sector.md` | `…/commands/sector.md` → 同路径 | 行业范围 → 境内行业分类与统计口径来源。**保留** 概览/深挖两档与用途追问 | 同上（无副本） | 同上 |
+| WB-CUSTOM-18 | `baseline/upstream-574ed36@574ed36:plugins/vertical-plugins/equity-research/commands/thesis.md` | `…/commands/thesis.md` → 同路径 | 标的与目标价口径 → 证券代码+交易所、CNY/HKD。**保留** 论点建立/更新流程与留痕 | 同上（无副本） | 同上 |
+
+### 非文本资产登记
+
+| 资产 | 路径 | 来源与授权 | SHA-256 |
+|---|---|---|---|
+| 专家头像 | `workbuddy-experts/equity-research/avatars/expert.png` | **待 Ray 提供**（真实获授权资产；不生成占位身份/资产） | 待提供后登记 |
+
+### 本地化增量合并规则
+
+1. **三方比对**：上游有新提交时，用 `baseline/upstream-574ed36` 的树、`workbuddy/main` 的新提交、当前本地化结果逐项比对；本 CR 不把设计期或本地提交当作上游水位。
+2. **未冲突才合并**：仅当上游改动与本地化不在同一语义位置时直接合并；合并后运行 `python scripts/sync-agent-skills.py` 同步受影响的具名副本。
+3. **冲突交人裁决**：同一处语义冲突时记录上游新 SHA、原 SHA、取舍理由，交 Ray 裁决；禁止直接覆写本地化约束（如把 CNY 改回 USD、把交易所披露页改回 EDGAR）。
+4. **标记与追溯**：本地化文本保留 `WB-CUSTOM` 标记与本表记录号；新增/删除本地化块必须同步更新本表（记录号连续，不跳号、不留占位行）。
+5. **JSON 约束**：`plugin.json` 等 JSON 不插注释；本地化说明只写在合法字符串字段或本表。
+6. **范围约束**：只允许本 CR `sdd.md` §8 `scope_in` 内的文件变更；同步脚本若顺带改动无关既有漂移，先停止核对批准范围，不把无关 diff 捎带进本 CR。
 
 ## 同步记录（新记录追加在顶部）
 
@@ -61,6 +113,6 @@
 
 ## 尚未实施（别把计划算进台账完成项）
 
-- 二级市场研究 9 技能的 A股/港股本地化尚未动工：深改 `earnings-analysis`、`initiating-coverage`；中改 `catalyst-calendar`、`earnings-preview`、`morning-note`、`idea-generation`；轻改 `thesis-tracker`、`sector-overview`、`model-update`。动工后逐技能追加台账行，保留原要求与等价映射；先改 vertical 真源再同步 bundle。
-- `workbuddy-experts/equity-research/`、导出脚本、目标环境验收/发布尚未完成；具体门禁与数据源边界以 09-25 方案 v1.2 为准。
+- 二级市场研究 9 技能的 A股/港股本地化（深改 `earnings-analysis`、`initiating-coverage`；中改 `catalyst-calendar`、`earnings-preview`、`morning-note`、`idea-generation`；轻改 `thesis-tracker`、`sector-overview`、`model-update`）：**源码级本地化已由 CR-2026-001 实施**（`#9` + 《WB-CUSTOM 本地化明细》），源文件带 `WB-CUSTOM` 标记、10 文本改动的具名副本经同步脚本重建；验收（cmd-04 及人工抽查）随 CR 评审闭合，未闭合前不记为已完成。
+- `workbuddy-experts/equity-research/`、导出脚本、目标环境验收/发布：包源与导出脚本已落盘（`#10`），但**导出尚未成功**（缺 Ray 提供的获授权头像 `avatars/expert.png`）、目标 `expert-manager` 与本机安装/召唤证据未建立，宿主验收保持阻断；不得记为已完成。
 - 双周同步是维护节奏，不是已部署的定时器；每轮以《同步记录》中的实测结果为准。
