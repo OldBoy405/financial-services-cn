@@ -297,6 +297,11 @@ class ExportAndHost(RepoTest):
         receipts = json.loads(HOST_EVIDENCE.read_text(encoding="utf-8"))
         for field in ("client", "validator", "steps", "install", "summon", "author", "avatar-authorization"):
             self.assertIn(field, receipts, f"host receipts missing {field}")
+        summon_status = str(receipts["summon"].get("status", "")).strip()
+        self.assertTrue(summon_status.startswith("observed"),
+                        "AC-07 / plan.md require cmd-07 to verify the actual local summon: an "
+                        "unobserved (pending) summon receipt must fail this command instead of "
+                        f"passing on the field's presence (status={summon_status!r})")
         for step in receipts["steps"]:
             for field in ("command", "output-file", "sha256", "exit-code"):
                 self.assertIn(field, step, f"validator step missing {field}")
@@ -314,30 +319,65 @@ class ExportAndHost(RepoTest):
 
         The receipt may only support "the expert was summoned" when it carries an
         observed status with its own timestamped evidence (UI observation or host
-        output); while the status is pending the versioned record must declare it as
-        untested instead of citing the session records as proof. An unknown status
-        passes neither branch.
+        output). An unobserved summon fails cmd-07 at once: the versioned record saying
+        "untested" does not make the missing evidence acceptable (TASK-04 §4 / plan.md
+        "测试失败/缺证据必须非零"). An unknown status passes neither branch.
         """
         receipts = json.loads(HOST_EVIDENCE.read_text(encoding="utf-8"))
         summon = receipts["summon"]
         status = str(summon.get("status", "")).strip()
         self.assertTrue(status, "the host receipt must record the summon status")
-        section3 = ACCEPTANCE.read_text(encoding="utf-8").split("## 3. 包校验", 1)[1].split("## 4.", 1)[0]
         if status.startswith("pending"):
-            self.assertIn("待实测", section3,
-                          "a pending summon receipt must be recorded in ACCEPTANCE §3 as untested")
-            self.assertNotRegex(section3, r"已召唤|召唤：在\s*WorkBuddy",
-                                "a pending summon receipt must not be claimed as an observed summon")
-        else:
-            self.assertEqual(status, "observed",
-                             f"summon status must be 'observed' or 'pending-*', got {status!r}")
-            for field in ("observed-at", "evidence-file", "sha256"):
-                self.assertTrue(str(summon.get(field, "")).strip(),
-                                f"an observed summon must record {field} (real UI observation / host output)")
-            raw = ROOT / summon["evidence-file"]
-            self.assertTrue(raw.is_file(), f"summon observation evidence missing: {summon['evidence-file']}")
-            self.assertEqual(hashlib.sha256(raw.read_bytes()).hexdigest(), summon["sha256"],
-                             "summon observation hash mismatch")
+            self.fail(
+                "AC-07 must fail while the summon stays unobserved: TASK-04 §4 and plan.md "
+                "require cmd-07 — the only AC-07 command — to verify the real local summon, "
+                "so a pending receipt (even with ACCEPTANCE §3 written as 待实测) cannot "
+                f"exit 0 (status={status!r}, receipt={HOST_EVIDENCE}). Capture the actual "
+                "observation, then set summon.status='observed' with observed-at / "
+                "evidence-file / sha256"
+            )
+        self.assertEqual(status, "observed",
+                         f"summon status must be 'observed', got {status!r}")
+        for field in ("observed-at", "evidence-file", "sha256"):
+            self.assertTrue(str(summon.get(field, "")).strip(),
+                            f"an observed summon must record {field} (real UI observation / host output)")
+        raw = ROOT / summon["evidence-file"]
+        self.assertTrue(raw.is_file(), f"summon observation evidence missing: {summon['evidence-file']}")
+        self.assertEqual(hashlib.sha256(raw.read_bytes()).hexdigest(), summon["sha256"],
+                         "summon observation hash mismatch")
+
+    def test_unobserved_summon_receipt_is_refused(self) -> None:
+        """B-05 negative case, executed for real: a pending summon must fail cmd-07.
+
+        cmd-07 is the only AC-07 acceptance command, so the refusal itself has to be
+        exercised rather than trusted. The counterfactual is built from the real receipt
+        (summon.status flipped back to pending) plus a minimal §3 that claims 待实测 and
+        no summon, exactly the state the reviewer showed could still exit 0.
+        """
+        receipt = json.loads(HOST_EVIDENCE.read_text(encoding="utf-8"))
+        receipt["summon"] = {"status": "pending-observation"}
+        pending_receipt = HOST_EVIDENCE.with_name("summon-pending-negative.json")
+        pending_receipt.write_text(json.dumps(receipt, ensure_ascii=False), encoding="utf-8")
+        pending_acceptance = ACCEPTANCE.with_name("acceptance-pending-negative.md")
+        pending_acceptance.write_text(
+            "## 3. 包校验 / 本机安装 / 召唤记录（G4 已记录，裁决人 Ray）\n\n"
+            "| 项 | 当前值 |\n|---|---|\n"
+            "| 本机安装与召唤观察 | 待实测（尚未观察到本机召唤） |\n\n"
+            "## 4. 路由与安全负例记录\n",
+            encoding="utf-8",
+        )
+        module = globals()
+        original = module["HOST_EVIDENCE"], module["ACCEPTANCE"]
+        module["HOST_EVIDENCE"], module["ACCEPTANCE"] = pending_receipt, pending_acceptance
+        try:
+            for gate in ("test_host_receipts_required",
+                         "test_host_summon_receipt_matches_the_acceptance_record"):
+                with self.subTest(gate=gate), self.assertRaises(AssertionError):
+                    getattr(self, gate)()
+        finally:
+            module["HOST_EVIDENCE"], module["ACCEPTANCE"] = original
+            pending_receipt.unlink(missing_ok=True)
+            pending_acceptance.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
