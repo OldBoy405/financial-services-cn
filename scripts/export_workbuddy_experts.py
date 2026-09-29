@@ -25,6 +25,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import sys
 import time
 from pathlib import Path
@@ -87,10 +88,50 @@ def ensure_inside(candidate: Path, root: Path, what: str) -> Path:
     return resolved
 
 
-def check_no_symlinks(path: Path) -> None:
-    for p in path.rglob("*"):
-        if p.is_symlink():
-            raise ExportError(f"symlink not allowed in package: {p.relative_to(path)}")
+FILE_ATTRIBUTE_REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+
+
+def link_kind(path: Path) -> str | None:
+    """Label `path` when it is a link, else None.
+
+    Windows junctions and mounted folders are reparse points but not symlinks, and
+    `shutil.copyfile`/`copytree` dereference all of them, so both kinds must be
+    refused by the same gate.
+    """
+    if path.is_symlink():
+        return "symlink"
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return None
+    if getattr(st, "st_file_attributes", 0) & FILE_ATTRIBUTE_REPARSE_POINT:
+        return "reparse point (junction/mount)"
+    return None
+
+
+def check_no_links(root: Path, what: str) -> None:
+    """Refuse links inside a **source** tree before anything is copied.
+
+    Checking only the staged copy is not enough: the copy helpers dereference source
+    links, so a link inside a skill source directory that points outside the package
+    used to be staged as a regular file and pass a post-copy check (AC-07 escape).
+    Never descends into a link, so a self-referencing link cannot loop.
+    """
+    stack = [root]
+    while stack:
+        current = stack.pop()
+        kind = link_kind(current)
+        if kind is not None:
+            raise ExportError(f"{kind} not allowed in {what}: {current}")
+        if not current.is_dir():
+            continue
+        for entry in os.scandir(current):
+            child = Path(entry.path)
+            kind = link_kind(child)
+            if kind is not None:
+                raise ExportError(f"{kind} not allowed in {what}: {child}")
+            if entry.is_dir(follow_symlinks=False):
+                stack.append(child)
 
 
 def check_text_safety(path: Path, package_root: Path) -> None:
@@ -147,6 +188,7 @@ def load_manifest(pkg_src: Path) -> dict:
     manifest_path = pkg_src / ".codebuddy-plugin/plugin.json"
     if not manifest_path.is_file():
         raise ExportError(f"missing manifest: {manifest_path}")
+    check_no_links(manifest_path, "manifest")
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
@@ -212,6 +254,7 @@ def build(repo_root: Path) -> tuple[Path, list[tuple[str, str]], float, int]:
             raise ExportError(f"skill source without SKILL.md: {source}")
         if str(source.resolve()).startswith(str(out_root.resolve())):
             raise ExportError(f"skill source must not come from out/: {source}")
+        check_no_links(source, f"skill source {name}")
         skill_dirs.append((name, source))
 
     started = time.monotonic()
@@ -226,6 +269,7 @@ def build(repo_root: Path) -> tuple[Path, list[tuple[str, str]], float, int]:
             source = pkg_src / rel
             if not source.is_file():
                 raise ExportError(f"missing package source file: {source}")
+            check_no_links(source, f"package source file {rel}")
             target = staging / rel
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, target)
@@ -233,7 +277,7 @@ def build(repo_root: Path) -> tuple[Path, list[tuple[str, str]], float, int]:
         for name, source in skill_dirs:
             shutil.copytree(source, staging / "skills" / name)
 
-        check_no_symlinks(staging)
+        check_no_links(staging, "staged package")
         for path in sorted(staging.rglob("*")):
             if path.is_file():
                 check_text_safety(path, staging)

@@ -16,6 +16,7 @@ from _support import (
     ACCEPTANCE,
     AGENT,
     CLIENT_EVIDENCE,
+    MANIFEST,
     NINE_PAIRS,
     ROOT,
     SLOT_STATES,
@@ -24,6 +25,11 @@ from _support import (
 )
 
 REQUIRED_SESSION_FIELDS = ("client-version", "case-id", "prompt", "response", "evidence-file", "sha256")
+# A decision record must open with one of the three SDD §3.2 outcomes, and a Route
+# must name the one skill it selected (CN and EN wordings of the same contract).
+DECISION_RE = re.compile(r"^(Clarify|Stop|Route)\(")
+ROUTE_RE = re.compile(r"Route\((?:唯一|unique) skill: ([A-Za-z0-9._-]+)\)")
+SLOT_LANGUAGES = (("cn", "zh-CN"), ("en", "en-US"))
 
 
 class Routing(RepoTest):
@@ -69,6 +75,85 @@ class Routing(RepoTest):
             self.assertTrue(str(slot["route-prompt-cn"]).strip())
             self.assertTrue(str(slot["route-prompt-en"]).strip())
 
+    def test_slot_cases_are_one_to_one_with_the_nine_skills(self) -> None:
+        """Each SLOT's captured CN/EN case must be the raw prompt, routed to its one skill.
+
+        A matching session count or the bare presence of a `SKILL_SELECTION` string is
+        not routing evidence: the recorded response itself must be the unique Route for
+        that slot's skill (AC-05).
+        """
+        index = json.loads(CLIENT_EVIDENCE.read_text(encoding="utf-8"))
+        by_case = {session["case-id"]: session for session in index["sessions"]}
+        routed: list[str] = []
+        for position, (_, skill) in enumerate(NINE_PAIRS, start=1):
+            slot = self.slots[position - 1]
+            slot_no = f"SLOT-{position:02d}"
+            for lang, language in SLOT_LANGUAGES:
+                case_id = f"slot-{position:02d}-{lang}"
+                record = by_case.get(case_id)
+                self.assertIsNotNone(record, f"no captured case {case_id} for {slot_no}/{skill}")
+                self.assertEqual(record["acceptance-slot"], slot_no, f"{case_id}: bound to the wrong slot")
+                self.assertEqual(record["language"], language, f"{case_id}: wrong language tag")
+                self.assertEqual(record["SKILL_SELECTION"], skill, f"{case_id}: captured the wrong skill")
+                self.assertEqual(record["prompt"], slot[f"route-prompt-{lang}"],
+                                 f"{case_id}: raw input is not the {slot_no} authority prompt")
+                response = record["response"].strip()
+                decision = DECISION_RE.match(response)
+                self.assertIsNotNone(decision, f"{case_id}: response is not a Clarify/Stop/Route decision")
+                self.assertEqual(decision.group(1), "Route", f"{case_id}: a positive case must route")
+                chosen = ROUTE_RE.findall(response)
+                self.assertEqual(chosen, [skill],
+                                 f"{case_id}: response must select exactly the unique Route {skill}")
+                routed.append(chosen[0])
+        self.assertEqual(len(set(routed)), 9, "the nine skills must be covered, one slot-pair each")
+
+    def test_quickprompts_match_the_declared_entries_and_skills(self) -> None:
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        index = json.loads(CLIENT_EVIDENCE.read_text(encoding="utf-8"))
+        records = {record["case-id"]: record for record in index["quickprompts"]}
+        self.assertEqual(sorted(records), ["qp-01", "qp-02", "qp-03"],
+                         "the three quickPrompt entries must each be captured once")
+        for position, (_, skill) in enumerate(NINE_PAIRS[:3]):
+            case_id = f"qp-{position + 1:02d}"
+            record = records[case_id]
+            self.assertEqual(record["prompt"], manifest["quickPrompts"][position]["zh"],
+                             f"{case_id}: prompt must be the manifest quickPrompt verbatim")
+            self.assertIn(skill, f"{record.get('observation', '')} {record['response']}",
+                          f"{case_id}: the entry must be observed on the {skill} path")
+            decision = DECISION_RE.match(record["response"].strip())
+            self.assertIsNotNone(decision, f"{case_id}: response is not a Clarify/Stop/Route decision")
+            if decision.group(1) != "Route":
+                self.assertRegex(record["response"], r"不调用任何技能|不选中任何技能",
+                                 f"{case_id}: {decision.group(1)} must state that no skill was invoked")
+
+    def test_versioned_acceptance_record_carries_the_evidence_index(self) -> None:
+        """AC-08: the versioned record — not the ignored out/ dir — must locate evidence by hash.
+
+        The recorded session version, the per-slot positive results and a
+        `<path>::<sha256>` index per slot are what make the ignored raw capture
+        checkable by a human reviewer.
+        """
+        for position, (_, skill) in enumerate(NINE_PAIRS, start=1):
+            slot = self.slots[position - 1]
+            for field in ("date", "source-version", "positive-result", "adjudicator"):
+                self.assertTrue(str(slot.get(field, "")).strip(),
+                                f"SLOT-{position:02d} must record {field}")
+            entries = slot.get("evidence-files")
+            self.assertIsInstance(entries, list, f"SLOT-{position:02d} must index its evidence files")
+            self.assertEqual(len(entries), 2, f"SLOT-{position:02d} must index its CN and EN case")
+            for entry in entries:
+                path_part, _, digest = str(entry).partition("::")
+                self.assertTrue(digest.strip(),
+                                f"SLOT-{position:02d}: evidence entry must be '<path>::<sha256>'")
+                evidence = ROOT / path_part
+                self.assertTrue(evidence.is_file(), f"SLOT-{position:02d}: recorded evidence missing: {path_part}")
+                self.assertEqual(hashlib.sha256(evidence.read_bytes()).hexdigest(), digest.strip(),
+                                 f"SLOT-{position:02d}: recorded evidence hash mismatch: {path_part}")
+            recorded = " ".join(str(entry) for entry in entries)
+            for case_id in (f"slot-{position:02d}-cn", f"slot-{position:02d}-en"):
+                self.assertIn(case_id, recorded, f"SLOT-{position:02d} index must name {case_id}")
+            self.assertEqual(slot["skill"], skill)
+
     def test_target_client_evidence_exists(self) -> None:
         self.assertTrue(
             CLIENT_EVIDENCE.is_file(),
@@ -93,6 +178,13 @@ class Routing(RepoTest):
             self.assertTrue(evidence.is_file(), f"raw client output missing: {session['evidence-file']}")
             digest = hashlib.sha256(evidence.read_bytes()).hexdigest()
             self.assertEqual(digest, session["sha256"], f"raw output hash mismatch: {session['evidence-file']}")
+            # The index entry must agree with the raw capture it points at, not just hash it.
+            raw = json.loads(evidence.read_text(encoding="utf-8"))
+            if isinstance(raw, dict) and "prompt" in raw and "response" in raw:
+                self.assertEqual(raw["prompt"], session["prompt"],
+                                 f"index/raw prompt drift: {session['case-id']}")
+                self.assertEqual(raw["response"], session["response"],
+                                 f"index/raw response drift: {session['case-id']}")
             seen_pairs.add(session["case-id"])
         self.assertGreaterEqual(len(seen_pairs), 18, "case ids must be unique per captured case")
         for marker in ("quickPrompt", "Clarify", "Stop"):

@@ -64,6 +64,27 @@ def digests(package: Path) -> list[tuple[str, str]]:
     return out
 
 
+def make_escape_link(link: Path, target: Path) -> str:
+    """Create a real link at `link` -> `target`; return which mechanism was used.
+
+    A symbolic link needs SeCreateSymbolicLinkPrivilege on Windows; an NTFS directory
+    junction needs no privilege and `shutil` copy helpers dereference it exactly the
+    same way, so the AC-07 escape negative can run for real on this host instead of
+    being skipped (SDD §7: link targets stay inside the package).
+    """
+    try:
+        os.symlink(target, link, target_is_directory=target.is_dir())
+        return "symlink"
+    except (OSError, NotImplementedError):
+        pass
+    if os.name == "nt":
+        created = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                                 capture_output=True, text=True)
+        if created.returncode == 0:
+            return "junction"
+    raise unittest.SkipTest("no link mechanism available on this host")
+
+
 def make_fixture(root: Path) -> Path:
     fixture = root / "repo"
     (fixture / PACKAGE_REL / "avatars").mkdir(parents=True)
@@ -180,17 +201,39 @@ class ExportAndHost(RepoTest):
                 self.assertEqual(digests(package), good,
                                  f"{name}: previous valid package must survive a failed export "
                                  "(no partial package may become installable)")
+
+    def test_source_escape_link_is_refused_and_never_copied(self) -> None:
+        """AC-07 escape negative, executed for real (no skip) on this host.
+
+        The source skill tree carries a link to a directory outside the package; the
+        copy helpers would dereference it and stage the outside file as a regular file,
+        which a post-copy check can no longer see. The export must fail on the source
+        link itself and must never copy the outside content anywhere.
+        """
         with tempfile.TemporaryDirectory() as tmp:
             fixture = make_fixture(Path(tmp))
-            link = fixture / "plugins" / "vertical-plugins" / "equity-research" / "skills" / "model-update" / "escape.md"
-            try:
-                link.symlink_to(ROOT / "README.md")
-            except (OSError, NotImplementedError):
-                self.skipTest("symlink creation not permitted on this host")
+            self.assertEqual(export(fixture).returncode, 0, "fixture must export first")
+            package = fixture / "out" / "workbuddy-experts" / "equity-research"
+            good = digests(package)
+            outside = Path(tmp) / "outside"
+            outside.mkdir()
+            marker = "package-external content that must never ship"
+            (outside / "escaped.md").write_text(marker + "\n", encoding="utf-8")
+            link = (fixture / "plugins" / "vertical-plugins" / "equity-research"
+                    / "skills" / "model-update" / "escaped")
+            kind = make_escape_link(link, outside)
             failed = export(fixture)
-            self.assertNotEqual(failed.returncode, 0, "symlinked files must be refused")
-            self.assertFalse((fixture / "out" / "workbuddy-experts" / "equity-research").exists(),
-                             "a refused export must not publish a package")
+            self.assertNotEqual(failed.returncode, 0,
+                                f"a source {kind} pointing outside the package must be refused")
+            self.assertIn("EXPORT_FAILED", failed.stderr)
+            self.assertTrue("not allowed" in failed.stderr and ("symlink" in failed.stderr or "junction" in failed.stderr),
+                            f"refusal must name the source link, got: {failed.stderr.strip()[:300]}")
+            self.assertEqual(digests(package), good,
+                             "a refused export must leave the previous valid package untouched")
+            for path in package.rglob("*"):
+                if path.is_file():
+                    self.assertNotIn(marker, path.read_text(encoding="utf-8", errors="replace"),
+                                     f"package-external content leaked into {path.name}")
 
     def test_host_receipts_required(self) -> None:
         self.assertTrue(
