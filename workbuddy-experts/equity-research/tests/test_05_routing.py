@@ -25,6 +25,12 @@ from _support import (
 )
 
 REQUIRED_SESSION_FIELDS = ("client-version", "case-id", "prompt", "response", "evidence-file", "sha256")
+# SDD 3.2 / AC-05: every positive case carries the simulated authorization premise, and
+# the recorded response must show the guard premises were met before the Route decision
+# (B-04: nine prompts were missing the premise and the window could not be judged).
+PREMISE_PROMPT_CN = "模拟授权前提"
+PREMISE_PROMPT_EN = "Simulated authorization premise"
+PREMISE_RESPONSE_RE = re.compile(r"授权前提|authorization premise", re.IGNORECASE)
 # A decision record must open with one of the three SDD §3.2 outcomes, and a Route
 # must name the one skill it selected (CN and EN wordings of the same contract).
 DECISION_RE = re.compile(r"^(Clarify|Stop|Route)\(")
@@ -74,6 +80,12 @@ class Routing(RepoTest):
             self.assertEqual(slot["research-state"], "待测")
             self.assertTrue(str(slot["route-prompt-cn"]).strip())
             self.assertTrue(str(slot["route-prompt-en"]).strip())
+            self.assertIn(PREMISE_PROMPT_CN, str(slot["route-prompt-cn"]),
+                          f"SLOT-{index:02d}: the positive prompt must carry the simulated authorization premise")
+            self.assertIn(PREMISE_PROMPT_EN, str(slot["route-prompt-en"]),
+                          f"SLOT-{index:02d}: the EN positive prompt must carry the simulated authorization premise")
+            self.assertTrue(str(slot.get("guard-premises", "")).strip(),
+                            f"SLOT-{index:02d} must declare its guard premises (authorization / recency / source)")
 
     def test_slot_cases_are_one_to_one_with_the_nine_skills(self) -> None:
         """Each SLOT's captured CN/EN case must be the raw prompt, routed to its one skill.
@@ -98,6 +110,9 @@ class Routing(RepoTest):
                 self.assertEqual(record["prompt"], slot[f"route-prompt-{lang}"],
                                  f"{case_id}: raw input is not the {slot_no} authority prompt")
                 response = record["response"].strip()
+                self.assertRegex(response, PREMISE_RESPONSE_RE,
+                                 f"{case_id}: the recorded response must state the guard premise "
+                                 "(authorization premise) that let the case pass the front guard")
                 decision = DECISION_RE.match(response)
                 self.assertIsNotNone(decision, f"{case_id}: response is not a Clarify/Stop/Route decision")
                 self.assertEqual(decision.group(1), "Route", f"{case_id}: a positive case must route")

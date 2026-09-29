@@ -26,13 +26,18 @@
 
 ## 2. 九个独立记录位
 
+守卫前提（SDD §3.2 / AC-05，B-04 修正）：每条正例问法自带「模拟授权前提」语句，逐槽位的时效与来源/口径前提记在 `guard-premises`；采集到的响应必须记录守卫判定（含授权前提与时效），缺任一前提的正例不得计为路由通过。
+
+**v2 采集待重采**：现行 §4.1 索引的 18 条正例来自 2026-09-29T10:15 会话记录，其问法无模拟授权前提、SLOT-01 报告期超出三个月时效窗口（B-04）；客户端实际召唤 UI 观察亦未取得（B-05，`out/evidence/host/index.json` 的 `summon.status=pending-interactive-client-session`）。按本版 §2 问法重采并取到宿主观察后，再引用 §4.1 作为正例证据；此前 §1 的「包校验 / 本机安装 / 召唤」与「路由」两栏不得计为通过。
+
 ### SLOT-01 `/earnings` → `earnings-analysis`
 
 ```yaml
 slot: SLOT-01
 skill: earnings-analysis
-route-prompt-cn: "帮我做贵州茅台(600519.SH) 2025 年三季报的业绩点评，用扣非口径，数据来自定期报告和交易所披露。"
-route-prompt-en: "Write a post-earnings update for Kweichow Moutai (600519.SH), 2025 Q3 results, use the recurring-profit basis and exchange disclosure sources."
+route-prompt-cn: "帮我做贵州茅台(600519.SH) 2026 年半年报的业绩点评，用扣非口径，数据来自定期报告和交易所披露。（模拟授权前提：本会话已获得该请求所需数据域的使用许可，仅用于本次验收模拟。）"
+route-prompt-en: "Write a post-earnings update for Kweichow Moutai (600519.SH), 2026 H1 results, use the recurring-profit basis and exchange disclosure sources. (Simulated authorization premise: this session already holds the license for the data domains this request needs; acceptance simulation only.)"
+guard-premises: "授权=模拟已获许可（仅验收模拟）；时效=2026H1（定期报告发布后三个月内）；来源/口径=扣非口径、定期报告与交易所披露"
 date: "2026-09-29"
 source-version: "WorkBuddy 37.10.3-24 客户端会话（本机 version 文件）；skill-expert-manager 5.5.6-wb.38337834.g5f969292.h7826dc9400fd"
 evidence-files: ["out/evidence/client-sessions/sessions/positive/slot-01-cn.json::d8b4ae78fbaac2a3ed5696589ea7609538a240cbe196e3ac1966a75af8a2e932", "out/evidence/client-sessions/sessions/positive/slot-01-en.json::ce6b322e2beac2100e62ff4dde3b7701b86e835b80b6b0085aba247207734f62"]
@@ -48,8 +53,9 @@ research-state: 待测
 ```yaml
 slot: SLOT-02
 skill: initiating-coverage
-route-prompt-cn: "为宁德时代(300750.SZ)做首次覆盖，只执行 Task 1 公司研究，不要连跑后面的 Task。"
-route-prompt-en: "Start an initiation on CATL (300750.SZ) — run Task 1 company research only, do not chain the remaining tasks."
+route-prompt-cn: "为宁德时代(300750.SZ)做首次覆盖，只执行 Task 1 公司研究，不要连跑后面的 Task。（模拟授权前提：本会话已获得该请求所需数据域的使用许可，仅用于本次验收模拟。）"
+route-prompt-en: "Start an initiation on CATL (300750.SZ) — run Task 1 company research only, do not chain the remaining tasks. (Simulated authorization premise: this session already holds the license for the data domains this request needs; acceptance simulation only.)"
+guard-premises: "授权=模拟已获许可（仅验收模拟）；时效=不适用（首次覆盖框架）；来源/口径=公司研究；Task 1～5 单次发起"
 date: "2026-09-29"
 source-version: "WorkBuddy 37.10.3-24 客户端会话（本机 version 文件）；skill-expert-manager 5.5.6-wb.38337834.g5f969292.h7826dc9400fd"
 evidence-files: ["out/evidence/client-sessions/sessions/positive/slot-02-cn.json::e114828d95a3eaf6b735de7e76b9b581f0c7a38aabfc2a7a5da7083925501a10", "out/evidence/client-sessions/sessions/positive/slot-02-en.json::4cc9eb341abd85bc9af19dd2b1f77ee02ffb46edfd81592d1d592291a5d0ed0c"]
@@ -65,8 +71,9 @@ research-state: 待测
 ```yaml
 slot: SLOT-03
 skill: model-update
-route-prompt-cn: "用刚出的业绩快报更新中国平安(601318.SH)的盈利模型，口径保持归母。"
-route-prompt-en: "Update the Ping An Insurance (601318.SH) earnings model with the just-released preliminary results, keep the attributable-profit basis."
+route-prompt-cn: "用刚出的业绩快报更新中国平安(601318.SH)的盈利模型，口径保持归母。（模拟授权前提：本会话已获得该请求所需数据域的使用许可，仅用于本次验收模拟。）"
+route-prompt-en: "Update the Ping An Insurance (601318.SH) earnings model with the just-released preliminary results, keep the attributable-profit basis. (Simulated authorization premise: this session already holds the license for the data domains this request needs; acceptance simulation only.)"
+guard-premises: "授权=模拟已获许可（仅验收模拟）；时效=最新披露期（业绩快报）；来源/口径=归母口径"
 date: "2026-09-29"
 source-version: "WorkBuddy 37.10.3-24 客户端会话（本机 version 文件）；skill-expert-manager 5.5.6-wb.38337834.g5f969292.h7826dc9400fd"
 evidence-files: ["out/evidence/client-sessions/sessions/positive/slot-03-cn.json::2b5c943540139e80746eb173c27e4f7bc5e9023a591d4085b2625714023ff5a3", "out/evidence/client-sessions/sessions/positive/slot-03-en.json::bd8ec116c0703cb6a615e2101e4a2b88f6cb16ea72cebd6fc021e66421d0d02b"]
@@ -82,8 +89,9 @@ research-state: 待测
 ```yaml
 slot: SLOT-04
 skill: idea-generation
-route-prompt-cn: "在 A 股里筛一批低估值的中盘制造业标的，给出筛选口径和数据来源。"
-route-prompt-en: "Screen A-share mid-cap industrials on a low-valuation basis, and state the screening criteria and data source."
+route-prompt-cn: "在 A 股里筛一批低估值的中盘制造业标的，给出筛选口径和数据来源。（模拟授权前提：本会话已获得该请求所需数据域的使用许可，仅用于本次验收模拟。）"
+route-prompt-en: "Screen A-share mid-cap industrials on a low-valuation basis, and state the screening criteria and data source. (Simulated authorization premise: this session already holds the license for the data domains this request needs; acceptance simulation only.)"
+guard-premises: "授权=模拟已获许可（仅验收模拟）；时效=不适用（筛选口径定义）；来源/口径=低估值；筛选域 westock-tool → tdx-connector / wind-finance，等价口径未核实则停"
 date: "2026-09-29"
 source-version: "WorkBuddy 37.10.3-24 客户端会话（本机 version 文件）；skill-expert-manager 5.5.6-wb.38337834.g5f969292.h7826dc9400fd"
 evidence-files: ["out/evidence/client-sessions/sessions/positive/slot-04-cn.json::d4b95a05c51528067813b7ee61013f3567a3e9bba11d8639f62c0f28dd2b3f5b", "out/evidence/client-sessions/sessions/positive/slot-04-en.json::2adaea633e1b5c0c326b67c7f5940d1dc240c6ea6d854e76761746b967860e37"]
@@ -99,8 +107,9 @@ research-state: 待测
 ```yaml
 slot: SLOT-05
 skill: catalyst-calendar
-route-prompt-cn: "看一下我自选池未来两周的催化剂日历，包括定期报告披露和限售解禁。"
-route-prompt-en: "Show the catalyst calendar for my watchlist over the next two weeks, including scheduled disclosures and lock-up expiries."
+route-prompt-cn: "看一下我自选池未来两周的催化剂日历，包括定期报告披露和限售解禁。（模拟授权前提：本会话已获得该请求所需数据域的使用许可，仅用于本次验收模拟。）"
+route-prompt-en: "Show the catalyst calendar for my watchlist over the next two weeks, including scheduled disclosures and lock-up expiries. (Simulated authorization premise: this session already holds the license for the data domains this request needs; acceptance simulation only.)"
+guard-premises: "授权=模拟已获许可（仅验收模拟）；时效=未来两周；来源/口径=定期报告披露、限售解禁；域 westock-data → neodata"
 date: "2026-09-29"
 source-version: "WorkBuddy 37.10.3-24 客户端会话（本机 version 文件）；skill-expert-manager 5.5.6-wb.38337834.g5f969292.h7826dc9400fd"
 evidence-files: ["out/evidence/client-sessions/sessions/positive/slot-05-cn.json::013d73977aec9299b9d926a2de3229b39bb6cb97bbe1abae5b7a2a1db21c0b0f", "out/evidence/client-sessions/sessions/positive/slot-05-en.json::0b7c43836a8ced6e18071eea7aac51496d6f365f3e376d8002994df6ad31b5c8"]
@@ -116,8 +125,9 @@ research-state: 待测
 ```yaml
 slot: SLOT-06
 skill: morning-note
-route-prompt-cn: "写一份今天的 A 股晨会纪要，覆盖隔夜外盘和昨天盘后的披露。"
-route-prompt-en: "Draft today's A-share morning note covering the overnight offshore session and yesterday's after-close disclosures."
+route-prompt-cn: "写一份今天的 A 股晨会纪要，覆盖隔夜外盘和昨天盘后的披露。（模拟授权前提：本会话已获得该请求所需数据域的使用许可，仅用于本次验收模拟。）"
+route-prompt-en: "Draft today's A-share morning note covering the overnight offshore session and yesterday's after-close disclosures. (Simulated authorization premise: this session already holds the license for the data domains this request needs; acceptance simulation only.)"
+guard-premises: "授权=模拟已获许可（仅验收模拟）；时效=今日；来源/口径=隔夜外盘、昨日盘后披露"
 date: "2026-09-29"
 source-version: "WorkBuddy 37.10.3-24 客户端会话（本机 version 文件）；skill-expert-manager 5.5.6-wb.38337834.g5f969292.h7826dc9400fd"
 evidence-files: ["out/evidence/client-sessions/sessions/positive/slot-06-cn.json::dad69db9fd58313c72c9dc19bebb8a0e9cd3a14c68bd38de83659ed23e49990d", "out/evidence/client-sessions/sessions/positive/slot-06-en.json::bd4fccbc56d07ae7087357e10255a32c7a99c7744a17a7111974566477f6d26f"]
@@ -133,8 +143,9 @@ research-state: 待测
 ```yaml
 slot: SLOT-07
 skill: earnings-preview
-route-prompt-cn: "给比亚迪(002594.SZ)做一份三季报的盘前预览，列出 bull/base/bear 情景。"
-route-prompt-en: "Build a pre-earnings preview for BYD (002594.SZ) Q3 results with bull/base/bear scenarios."
+route-prompt-cn: "给比亚迪(002594.SZ)做一份 2026 年三季报的盘前预览，列出 bull/base/bear 情景。（模拟授权前提：本会话已获得该请求所需数据域的使用许可，仅用于本次验收模拟。）"
+route-prompt-en: "Build a pre-earnings preview for BYD (002594.SZ) 2026 Q3 results with bull/base/bear scenarios. (Simulated authorization premise: this session already holds the license for the data domains this request needs; acceptance simulation only.)"
+guard-premises: "授权=模拟已获许可（仅验收模拟）；时效=2026Q3 盘前（报告期未发布）；来源/口径=bull/base/bear 情景"
 date: "2026-09-29"
 source-version: "WorkBuddy 37.10.3-24 客户端会话（本机 version 文件）；skill-expert-manager 5.5.6-wb.38337834.g5f969292.h7826dc9400fd"
 evidence-files: ["out/evidence/client-sessions/sessions/positive/slot-07-cn.json::ba9c77082e70aaf129e2dd53960819ee81979c9118ab9597406a1aef9ff0a879", "out/evidence/client-sessions/sessions/positive/slot-07-en.json::07d02870df7a08fbbfae545a3bf81112ef081bd90652fd3efe6e83540a718002"]
@@ -150,8 +161,9 @@ research-state: 待测
 ```yaml
 slot: SLOT-08
 skill: sector-overview
-route-prompt-cn: "写一份 A 股光伏行业的概览报告，5-10 页的量级，标注统计口径来源。"
-route-prompt-en: "Produce an A-share solar industry landscape overview at the 5-10 page level, citing the source of each statistic."
+route-prompt-cn: "写一份 A 股光伏行业的概览报告，5-10 页的量级，标注统计口径来源。（模拟授权前提：本会话已获得该请求所需数据域的使用许可，仅用于本次验收模拟。）"
+route-prompt-en: "Produce an A-share solar industry landscape overview at the 5-10 page level, citing the source of each statistic. (Simulated authorization premise: this session already holds the license for the data domains this request needs; acceptance simulation only.)"
+guard-premises: "授权=模拟已获许可（仅验收模拟）；时效=当前行业周期；来源/口径=光伏；统计口径逐项标注来源"
 date: "2026-09-29"
 source-version: "WorkBuddy 37.10.3-24 客户端会话（本机 version 文件）；skill-expert-manager 5.5.6-wb.38337834.g5f969292.h7826dc9400fd"
 evidence-files: ["out/evidence/client-sessions/sessions/positive/slot-08-cn.json::8926c25858daa329a362e67d96561ba15020a04799597205877b45d41555805e", "out/evidence/client-sessions/sessions/positive/slot-08-en.json::096e3b38362eae579d6db3417fbd25d55888648112caee579a90a70d35f1b266"]
@@ -167,8 +179,9 @@ research-state: 待测
 ```yaml
 slot: SLOT-09
 skill: thesis-tracker
-route-prompt-cn: "更新我对招商银行(600036.SH)的多头论点，新增一条上季度的数据点。"
-route-prompt-en: "Update my long thesis on China Merchants Bank (600036.SH) with one new data point from last quarter."
+route-prompt-cn: "更新我对招商银行(600036.SH)的多头论点，新增一条 2026 年二季度的数据点。（模拟授权前提：本会话已获得该请求所需数据域的使用许可，仅用于本次验收模拟。）"
+route-prompt-en: "Update my long thesis on China Merchants Bank (600036.SH) with one new 2026 Q2 data point. (Simulated authorization premise: this session already holds the license for the data domains this request needs; acceptance simulation only.)"
+guard-premises: "授权=模拟已获许可（仅验收模拟）；时效=2026Q2 数据点；来源/口径=多头论点更新"
 date: "2026-09-29"
 source-version: "WorkBuddy 37.10.3-24 客户端会话（本机 version 文件）；skill-expert-manager 5.5.6-wb.38337834.g5f969292.h7826dc9400fd"
 evidence-files: ["out/evidence/client-sessions/sessions/positive/slot-09-cn.json::1439f9b83f5ab2c6530bdddce3f585d4a9be2ead5659c9f6c8e17d7bc67df3dc", "out/evidence/client-sessions/sessions/positive/slot-09-en.json::a60f55f317960c8edcec5710113fe4073f3f5ddc99095ac133a5e194c49ad1b5"]
@@ -188,7 +201,7 @@ research-state: 待测
 | 目标客户端名称与版本 | 版本号 + 来源 | **WorkBuddy 37.10.3-24**（`D:\Program Files (x86)\WorkBuddy\version`，2026-09-29 读取） |
 | `expert-manager` 校验器版本与路径 | 版本 + 可执行位置 | **skill-expert-manager 5.5.6-wb.38337834.g5f969292.h7826dc9400fd**（user scope：`C:\Users\GOBAO\.workbuddy\plugins\cache\workbuddy-builtin\skill-expert-manager\5.5.6-…\scripts`） |
 | init/validate/register 步骤与原始输出 | 实际命令 + 完整输出 | `out/evidence/host/index.json`（steps + 原始日志 sha256）：validate-installed exit 0（`Expert package is valid!`）、register exit 0（写入 `my-experts/.codebuddy-plugin/marketplace.json`）、package exit 0（24 files → `out/dist/equity-research.zip`）；导出暂存区预装校验 exit 1 为安装前置事实（校验器要求专家位于宿主专家目录下） |
-| 本机安装与召唤观察 | 界面/CLI 实际观察 | 安装：包复制到 `~/.workbuddy/plugins/marketplaces/my-experts/plugins/equity-research` 并在 `.codebuddy-plugin/marketplace.json` 注册可见（2026-09-29T00:29:24+08:00；见 `out/evidence/host/index.json`，sha256 `8dbfa6206d37ae1b9040efc9d2a49c3947316bcc17baa1b2ca7984cd11bcd1d2`）。召唤：在 WorkBuddy 37.10.3-24 客户端会话中召唤 equity-research 专家；§4.1 的 18 条槽位会话 + 3 quickPrompts 与 §4.2 的 7 条负例即该会话的实际响应（`out/evidence/client-sessions/index.json`，生成于 2026-09-29T10:15:12+08:00；专家中心 GUI 截图未采集，如实声明）。 |
+| 本机安装与召唤观察 | 界面/CLI 实际观察 | 安装：包复制到 `~/.workbuddy/plugins/marketplaces/my-experts/plugins/equity-research` 并在 `.codebuddy-plugin/marketplace.json` 注册可见（2026-09-29T00:29:24+08:00；见 `out/evidence/host/index.json`，sha256 `8dbfa6206d37ae1b9040efc9d2a49c3947316bcc17baa1b2ca7984cd11bcd1d2`）。召唤：**待实测**（B-05）——`out/evidence/host/index.json` 的 `summon.status=pending-interactive-client-session`；v2 会话记录不构成召唤的 UI 观察回执（专家中心 GUI 截图/宿主输出未取得）。取得人类 owner 的客户端召唤观察后回填本行与 host 回执；在此之前本行不得计为通过。 |
 | author 邮箱、头像来源与授权 | 授权依据 + SHA-256 | author：OldBoy405 <403562935@qq.com>（Ray 2026-09-28 确认）；头像：Ray 本人自绘、可随包分发，PNG 500×610、307,262 字节、SHA-256 `616fd6bb…f3897`（完整值见 `out/evidence/host/index.json` `avatar-authorization`） |
 
 manifest 已按目标校验器 5.5.6 实际 schema 校正：i18n 字段（displayName/profession/displayDescription/defaultInitPrompt/quickPrompts/tags）改 `{zh,en}` 对象、新增 `description` 字段、`categoryId` 取 `08-FinanceInvestment`（12 个合法枚举之一）；`defaultInitPrompt` 与第一条 quickPrompt 逐字相等（SDD §3.1「与第一条 quickPrompt 相同」语义在目标 schema 形态下保持）。校验遗留 1 条非阻断 warning：displayDescription.zh 100 字符（建议 40-50）。
@@ -199,7 +212,7 @@ manifest 已按目标校验器 5.5.6 实际 schema 校正：i18n 字段（displa
 
 | 项 | 期望记录 | 当前值 |
 |---|---|---|
-| 18 条 CN/EN 正例逐条输入/响应 | 客户端版本 + 输入 + 输出 + 证据文件/哈希 | 已实测 18 条（SLOT-01..SLOT-09 各 CN/EN 一条）：输入 = §2 槽位问法逐字，响应 = 该槽位唯一 `Route`（CN/EN）且声明不代表研究结论合格；逐条输入/输出/哈希见 §4.1。 |
+| 18 条 CN/EN 正例逐条输入/响应 | 客户端版本 + 输入 + 输出 + 证据文件/哈希 | v2 已记录 18 条（SLOT-01..SLOT-09 各 CN/EN 一条）：输入 = §2 槽位问法逐字，响应 = 该槽位唯一 `Route`（CN/EN）且声明不代表研究结论合格；问法与响应逐条见 §4.1。**按 §2 新问法（模拟授权前提 + 时效修正）待重采**：v2 问法无模拟授权前提、SLOT-01 报告期超时效窗口（B-04）；重采前本行与 §4.1 不得作为正例通过证据。 |
 | 三条 quickPrompts（earnings/initiate/model-update） | 各自启动的路径 | qp-01/02/03 输入 = manifest `quickPrompts[0..2].zh` 逐字；实测响应均为 `Clarify(...)`（入口即确认缺失字段，不调用任何技能）；观察记录命中的技能路径与哈希见 §4.1。 |
 | 歧义请求 | Clarify 追问字段 | `Clarify(["securities-code","exchange","period","source","basis"])`：五字段逐项追问，补齐前不选中任何技能。证据 `out/evidence/client-sessions/sessions/negative/neg-ambiguous-request.json::4d4f0709a913cdb72b1f43b8eaaaad7d70f7a7559f5baeddb5ee702506fcb057`；完整响应见 §4.2。 |
 | 缺证券代码或交易所 | Clarify 追问字段 | `Clarify(["securities-code","exchange"])`：本次不调用任何技能。证据 `out/evidence/client-sessions/sessions/negative/neg-missing-security-code.json::e4381e9db0fe361d9fcb7d89b2fd29a82a8f1c85b4efd1399a330cc43a3755c1`；完整响应见 §4.2。 |

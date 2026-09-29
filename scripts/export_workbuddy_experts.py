@@ -134,6 +134,25 @@ def check_no_links(root: Path, what: str) -> None:
                 stack.append(child)
 
 
+def check_no_link_ancestors(path: Path, stop: Path, what: str) -> None:
+    """Refuse a link on any level of a **copy source** path below the repo root.
+
+    `check_no_links` only sees the source itself and its descendants, so a link on an
+    ancestor directory (`agents/`, `avatars/`, the skills source root) stays invisible
+    while `shutil.copyfile`/`copytree` dereference it and stage package-external
+    content (AC-07 escape). Every level of the source path is checked before any read
+    or copy; `stop` (the resolved repo root) is the invocation root, not a package
+    boundary.
+    """
+    current = path
+    stop = stop.resolve()
+    while current != stop and current.parent != current:
+        kind = link_kind(current)
+        if kind is not None:
+            raise ExportError(f"{kind} not allowed in {what}: {current}")
+        current = current.parent
+
+
 def check_text_safety(path: Path, package_root: Path) -> None:
     """Reject escaping relative references, sensitive names and sensitive content.
 
@@ -184,11 +203,12 @@ def check_text_safety(path: Path, package_root: Path) -> None:
         walk(data)
 
 
-def load_manifest(pkg_src: Path) -> dict:
+def load_manifest(pkg_src: Path, repo_root: Path) -> dict:
     manifest_path = pkg_src / ".codebuddy-plugin/plugin.json"
     if not manifest_path.is_file():
         raise ExportError(f"missing manifest: {manifest_path}")
     check_no_links(manifest_path, "manifest")
+    check_no_link_ancestors(manifest_path, repo_root, "manifest")
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
@@ -237,8 +257,12 @@ def build(repo_root: Path) -> tuple[Path, list[tuple[str, str]], float, int]:
         raise ExportError(f"missing package source: {pkg_src}")
     if not skill_src.is_dir():
         raise ExportError(f"missing skill source root: {skill_src}")
+    # An ancestor link is invisible to check_no_links (which inspects the source and
+    # its descendants only) but is still dereferenced on copy, so it is refused here.
+    check_no_link_ancestors(pkg_src, repo_root, "package source root")
+    check_no_link_ancestors(skill_src, repo_root, "skill source root")
 
-    manifest = load_manifest(pkg_src)
+    manifest = load_manifest(pkg_src, repo_root)
 
     skill_dirs: list[tuple[str, Path]] = []
     for entry in manifest["skills"]:
@@ -254,6 +278,7 @@ def build(repo_root: Path) -> tuple[Path, list[tuple[str, str]], float, int]:
             raise ExportError(f"skill source without SKILL.md: {source}")
         if str(source.resolve()).startswith(str(out_root.resolve())):
             raise ExportError(f"skill source must not come from out/: {source}")
+        check_no_link_ancestors(source, repo_root, f"skill source {name}")
         check_no_links(source, f"skill source {name}")
         skill_dirs.append((name, source))
 
@@ -269,6 +294,7 @@ def build(repo_root: Path) -> tuple[Path, list[tuple[str, str]], float, int]:
             source = pkg_src / rel
             if not source.is_file():
                 raise ExportError(f"missing package source file: {source}")
+            check_no_link_ancestors(source, repo_root, f"package source file {rel}")
             check_no_links(source, f"package source file {rel}")
             target = staging / rel
             target.parent.mkdir(parents=True, exist_ok=True)

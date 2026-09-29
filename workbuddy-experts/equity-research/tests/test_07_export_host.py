@@ -25,6 +25,7 @@ import unittest
 from pathlib import Path
 
 from _support import (
+    ACCEPTANCE,
     AGENT,
     AVATAR,
     EXPORT_SCRIPT,
@@ -235,6 +236,54 @@ class ExportAndHost(RepoTest):
                     self.assertNotIn(marker, path.read_text(encoding="utf-8", errors="replace"),
                                      f"package-external content leaked into {path.name}")
 
+    def test_ancestor_escape_link_is_refused_and_never_copied(self) -> None:
+        """AC-07 escape negative on a copy source's **ancestor** directories.
+
+        `check_no_links(source)` inspects the source and its descendants only, so a link
+        at `agents/` or on the skills source root is invisible to it while
+        `shutil.copyfile`/`copytree` still dereference it. Every level of the source
+        path must be refused before any read or copy (B-02).
+        """
+        marker = "ancestor-escape content that must never ship"
+        cases = {
+            # ancestor of a package source file (agents/equity-research.md)
+            "package-file-parent": lambda fixture, outside: (
+                shutil.rmtree(fixture / PACKAGE_REL / "agents"),
+                (outside / "equity-research.md").write_text(marker + "\n", encoding="utf-8"),
+                make_escape_link(fixture / PACKAGE_REL / "agents", outside),
+            ),
+            # ancestor of every skill source dir (skills/<name>)
+            "skill-source-parent": lambda fixture, outside: (
+                shutil.move(str(fixture / "plugins" / "vertical-plugins" / "equity-research" / "skills"),
+                            str(outside)),
+                (outside / "skills" / "model-update" / "leak-marker.md").write_text(marker + "\n", encoding="utf-8"),
+                make_escape_link(fixture / "plugins" / "vertical-plugins" / "equity-research" / "skills",
+                                 outside / "skills"),
+            ),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(scenario=name), tempfile.TemporaryDirectory() as tmp:
+                fixture = make_fixture(Path(tmp))
+                self.assertEqual(export(fixture).returncode, 0, f"{name}: fixture must export first")
+                package = fixture / "out" / "workbuddy-experts" / "equity-research"
+                good = digests(package)
+                outside = Path(tmp) / "outside"
+                outside.mkdir()
+                mutate(fixture, outside)
+                failed = export(fixture)
+                self.assertNotEqual(failed.returncode, 0,
+                                    f"{name}: an ancestor escape link must be refused")
+                self.assertIn("EXPORT_FAILED", failed.stderr)
+                self.assertTrue("not allowed" in failed.stderr
+                                and ("symlink" in failed.stderr or "junction" in failed.stderr),
+                                f"{name}: refusal must name the ancestor link, got: {failed.stderr.strip()[:300]}")
+                self.assertEqual(digests(package), good,
+                                 f"{name}: a refused export must leave the previous valid package untouched")
+                for path in package.rglob("*"):
+                    if path.is_file():
+                        self.assertNotIn(marker, path.read_text(encoding="utf-8", errors="replace"),
+                                         f"{name}: package-external content leaked into {path.name}")
+
     def test_host_receipts_required(self) -> None:
         self.assertTrue(
             HOST_EVIDENCE.is_file(),
@@ -259,6 +308,36 @@ class ExportAndHost(RepoTest):
         self.assertEqual(hashlib.sha256(AVATAR.read_bytes()).hexdigest(),
                          receipts["avatar-authorization"]["sha256"])
         self.assertIn("connectors", receipts, "the host verdict on the four connector ids must be recorded")
+
+    def test_host_summon_receipt_matches_the_acceptance_record(self) -> None:
+        """B-05: a summon claim needs a real observation, never an export exit 0.
+
+        The receipt may only support "the expert was summoned" when it carries an
+        observed status with its own timestamped evidence (UI observation or host
+        output); while the status is pending the versioned record must declare it as
+        untested instead of citing the session records as proof. An unknown status
+        passes neither branch.
+        """
+        receipts = json.loads(HOST_EVIDENCE.read_text(encoding="utf-8"))
+        summon = receipts["summon"]
+        status = str(summon.get("status", "")).strip()
+        self.assertTrue(status, "the host receipt must record the summon status")
+        section3 = ACCEPTANCE.read_text(encoding="utf-8").split("## 3. 包校验", 1)[1].split("## 4.", 1)[0]
+        if status.startswith("pending"):
+            self.assertIn("待实测", section3,
+                          "a pending summon receipt must be recorded in ACCEPTANCE §3 as untested")
+            self.assertNotRegex(section3, r"已召唤|召唤：在\s*WorkBuddy",
+                                "a pending summon receipt must not be claimed as an observed summon")
+        else:
+            self.assertEqual(status, "observed",
+                             f"summon status must be 'observed' or 'pending-*', got {status!r}")
+            for field in ("observed-at", "evidence-file", "sha256"):
+                self.assertTrue(str(summon.get(field, "")).strip(),
+                                f"an observed summon must record {field} (real UI observation / host output)")
+            raw = ROOT / summon["evidence-file"]
+            self.assertTrue(raw.is_file(), f"summon observation evidence missing: {summon['evidence-file']}")
+            self.assertEqual(hashlib.sha256(raw.read_bytes()).hexdigest(), summon["sha256"],
+                             "summon observation hash mismatch")
 
 
 if __name__ == "__main__":
