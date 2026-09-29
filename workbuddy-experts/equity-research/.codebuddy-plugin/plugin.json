@@ -1,0 +1,79 @@
+{
+  "name": "equity-research",
+  "version": "0.10.0",
+  "author": {
+    "name": "OldBoy405",
+    "email": "403562935@qq.com"
+  },
+  "description": "单一股票研究 Agent：中英文请求经前置守卫后路由到九项研究技能之一，缺授权或数据过期即停机。",
+  "expertType": "agent",
+  "agentName": "equity-research",
+  "agents": [
+    "./agents/equity-research.md"
+  ],
+  "skills": [
+    "./skills/earnings-analysis",
+    "./skills/initiating-coverage",
+    "./skills/model-update",
+    "./skills/idea-generation",
+    "./skills/catalyst-calendar",
+    "./skills/morning-note",
+    "./skills/earnings-preview",
+    "./skills/sector-overview",
+    "./skills/thesis-tracker"
+  ],
+  "displayName": {
+    "zh": "股票研究专家",
+    "en": "Equity Research Expert"
+  },
+  "profession": {
+    "zh": "股票研究",
+    "en": "Equity Research"
+  },
+  "displayDescription": {
+    "zh": "单一股票研究 Agent：中英文请求经前置守卫后选中九项研究技能之一（业绩点评、首次覆盖、模型更新、选股、催化剂、晨会、财报前瞻、行业概览、论点跟踪）。只做路由与停机，不代表数据已授权或研究结论合格。",
+    "en": "Single equity-research Agent: CN/EN requests pass a front guard and route to exactly one of nine research skills (post-earnings, initiation, model update, screening, catalysts, morning note, earnings preview, sector overview, thesis tracking). Routing and stop-gates only; no claim of data authorization or research quality."
+  },
+  "avatar": "./avatars/expert.png",
+  "categoryId": "08-FinanceInvestment",
+  "defaultInitPrompt": {
+    "zh": "帮我做一份 A 股业绩点评：先确认证券代码与交易所、报告期和数据来源。",
+    "en": "Draft an A-share post-earnings update: confirm the ticker/exchange, the reporting period and the data source first."
+  },
+  "quickPrompts": [
+    {
+      "zh": "帮我做一份 A 股业绩点评：先确认证券代码与交易所、报告期和数据来源。",
+      "en": "Draft an A-share post-earnings update: confirm the ticker/exchange, the reporting period and the data source first."
+    },
+    {
+      "zh": "为一家 A 股公司开始首次覆盖，只执行 Task 1 公司研究，不要连跑后面的 Task。",
+      "en": "Start an initiation on an A-share company, run Task 1 company research only, and do not chain the remaining tasks."
+    },
+    {
+      "zh": "用新披露的数据更新这家公司的盈利模型，口径保持不变。",
+      "en": "Update the earnings model for this company with the newly disclosed data, keeping the same basis."
+    }
+  ],
+  "tags": [
+    {
+      "zh": "股票研究",
+      "en": "Equity Research"
+    },
+    {
+      "zh": "A股港股",
+      "en": "A-share & HK"
+    },
+    {
+      "zh": "业绩与估值",
+      "en": "Earnings & Valuation"
+    }
+  ],
+  "dependencies": {
+    "connectors": [
+      "wind-finance",
+      "tdx-connector",
+      "neodata",
+      "westock-mcp"
+    ]
+  }
+}

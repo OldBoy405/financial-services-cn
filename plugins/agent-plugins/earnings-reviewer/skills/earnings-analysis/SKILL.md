@@ -5,6 +5,18 @@ description: Create professional equity research earnings update reports (8-12 p
 
 # Equity Research Earnings Update
 
+## WorkBuddy 本地化（WB-CUSTOM）
+
+**上游来源**：`anthropics/financial-services` @ `574ed3624aebd0418c7e96cd101262f30210ab26`（tag `baseline/upstream-574ed36`）；记录号见仓库根 `CUSTOM.md`。
+
+- **本地化记录**：`WB-CUSTOM-01`
+- **输入契约**：证券代码 + 交易所（`.SH`/`.SZ`/`.BJ`/`.HK`），报告期或日期，来源与口径（扣非/归母、CNY/HKD）；缺任一项先追问，不猜标的、不猜口径。
+- **数据域（声明，不执行真实连接器读取）**：见 `agents/equity-research.md` §数据域路由 [1 机构财务/公告/事件, 2 券商一致预期, 4 公开行情/K线/公告/日历]
+- **保留的旧约束（不静默删除）**：8-12 页、8-12 张图、1-3 张摘要表、beat/miss 量化到具体数值、发布后 24-48 小时时效、发布后三个月时效规则、transcript/纪要日期与发布日期的对应核对、引用与 Sources 清单（每个图表标注文档与日期）、DOCX 报告交付、八项交付前质检（见 `commands/earnings.md` Quality Checklist）
+- **中文等价口径**：定期报告（交易所披露页/巨潮资讯/港交所披露易）替代 10-Q + EDGAR 链接；一致预期改用境内可得来源并标注生成日期与口径；金额改为 CNY（A 股）/HKD（H 股）；篇幅锚改为「8-12 页 / 3,000-5,000 中文汉字（含图表标签与中文文件名）」；评级改为 A 股五档口径；英文篇幅限制不删除，改为中文等价验收口径。
+- **明确缺口**：`options-implied move` 无 A/H 等价项；盘前/盘后价格序列在 A/H 主要交易所无等价序列；A 股电话会 transcript 多不公开，改用业绩说明会/互动平台问答并标注替代性质。三项均标缺口，不造数。
+- **安全与停机**：无授权、数据过期、无等价数据源时追问或停机，不编造、不静默替换；不对外发布研究结论、不写回机构系统。
+
 Create professional **EARNINGS UPDATE REPORTS** analyzing quarterly results for companies already under coverage, following institutional standards (JPMorgan, Goldman Sachs, Morgan Stanley format).
 
 **Key Characteristics:**
@@ -15,7 +27,7 @@ Create professional **EARNINGS UPDATE REPORTS** analyzing quarterly results for 
 - **Turnaround**: 1-2 days (within 24-48 hours of earnings)
 - **Audience**: Clients already familiar with the company
 - **Focus**: What's NEW - beat/miss, updated estimates, thesis impact
-- **Font**: Times New Roman throughout (unless user specifies otherwise)
+- **字体**：中文交付用宋体/黑体（Times New Roman 仅用于拉丁文与数字）
 
 ## When to Use
 
@@ -54,9 +66,8 @@ Use when the user requests:
 **Include specific citations WITH CLICKABLE LINKS in every figure and table:**
 
 ```
-Source: Q3 2024 10-Q filed November 8, 2024; Company earnings release
-        [Hyperlink "10-Q" to: https://www.sec.gov/cgi-bin/viewer?accession=...]
-        [Hyperlink "earnings release" to: https://investor.company.com/news/q3-2024]
+Source: 2025Q3 定期报告（交易所披露页，披露日 2025-10-28）；公司业绩快报
+        [Hyperlink "定期报告" to: 交易所披露页/巨潮资讯/港交所披露易链接]
 ```
 
 **HOW HYPERLINKS SHOULD APPEAR IN WORD:**
@@ -68,10 +79,10 @@ Source: Q3 2024 10-Q filed November 8, 2024; Company earnings release
 
 Cite in every earnings update:
 - ✅ Earnings release (with date and URL)
-- ✅ 10-Q filing (with filing date and EDGAR link)
-- ✅ Earnings call transcript (with date)
-- ✅ Investor presentation/supplemental materials (if available)
-- ✅ Consensus estimates source (Bloomberg/FactSet/etc. with date)
+- ✅ 定期报告（交易所披露页链接与披露日期；H 股为港交所披露易）
+- ✅ 电话会 transcript / 业绩说明会记录（标注替代性质与日期）
+- ✅ 投资者演示/补充材料（若有）
+- ✅ 一致预期来源（境内可得来源，标注口径与生成日期）
 - ✅ Prior guidance (from previous quarter's materials)
 
 **REFERENCE SECTION WITH CLICKABLE HYPERLINKS:**
@@ -85,14 +96,14 @@ Earnings Materials (Q3 2024):
 • Earnings Release (November 7, 2024)
   [Hyperlink entire line to: https://investor.company.com/news/q3-2024-earnings]
 
-• Form 10-Q (Filed November 8, 2024)
-  [Hyperlink to: https://www.sec.gov/cgi-bin/viewer?accession=...]
+• 定期报告（2025 年 10 月 28 日披露）
+  [Hyperlink to: 交易所披露页 / 巨潮资讯 / 港交所披露易链接]
 
-• Earnings Call Transcript (November 7, 2024)
-  [Hyperlink to: https://seekingalpha.com/article/...]
+• 电话会 / 业绩说明会记录（2025 年 10 月 28 日）
+  [Hyperlink to: 公司投资者关系页或互动平台链接]
 
-• Investor Presentation (November 7, 2024)
-  [Hyperlink to: https://investor.company.com/presentations/q3-2024.pdf]
+• 投资者演示材料（2025 年 10 月 28 日）
+  [Hyperlink to: 公司投资者关系页链接]
 ```
 
 **VERIFICATION CHECKLIST:**
@@ -103,7 +114,7 @@ Earnings Materials (Q3 2024):
 - [ ] Key statistics have footnotes
 - [ ] Sources section lists all materials with URLs
 - [ ] ALL URLs are CLICKABLE HYPERLINKS (not plain text)
-- [ ] All SEC filings hyperlinked to EDGAR viewer
+- [ ] 定期报告均链接到交易所披露页（上交所/深交所/北交所/港交所披露易）
 
 ### 5. Updated Estimates
 - Update forward estimates based on results
