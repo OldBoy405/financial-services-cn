@@ -216,13 +216,56 @@ def crctl_mjs() -> Path:
     )
 
 
+def crctl_workspace() -> Path:
+    """Locate the CR's operational KB worktree without hardcoding a machine path.
+
+    CR-2026-072 made `--workspace` mandatory for every CR-data subcommand and removed
+    both the CRCTL_WORKSPACE environment variable and cwd implicit root selection, so the
+    controlled-shell adapter has to be handed the operational workspace explicitly. The
+    candidate is accepted only when it really carries this CR's ledger, and the search
+    mirrors crctl_mjs() (RayAI worktree layout `<kb>/.rayai-worktrees/<repo>/requirement/<CR>`).
+    """
+    import os
+
+    marker = Path("change-requests") / ROOT.name / "cr.md"
+    candidates = []
+    if os.environ.get("CR_KB_WORKSPACE"):
+        candidates.append(Path(os.environ["CR_KB_WORKSPACE"]))
+    if len(ROOT.parents) > 2:
+        worktrees = ROOT.parents[2]
+        candidates.append(worktrees / "knowledge-base" / "requirement" / ROOT.name)
+        candidates.extend(
+            cr_md.parents[2]
+            for cr_md in sorted(worktrees.glob(f"*/requirement/{ROOT.name}/{marker.as_posix()}"))
+        )
+    for candidate in candidates:
+        if (candidate / marker).is_file():
+            return candidate
+    raise AssertionError(
+        f"operational CR workspace not found: no {marker.as_posix()} for {ROOT.name} under the "
+        "RayAI worktrees; set CR_KB_WORKSPACE to that worktree (crctl requires an explicit "
+        "--workspace since CR-2026-072)"
+    )
+
+
 def crctl_git(*args: str) -> str:
     """Run a whitelisted read-only git command through the controlled shell (full stdout)."""
     node = shutil.which("node") or shutil.which("node.exe")
     if not node:
         raise AssertionError("node is required to run the controlled-shell adapter")
-    cmd = [node, str(crctl_mjs()), "git", *args, "--cwd", str(ROOT)]
-    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=str(ROOT))
+    cmd = [
+        node,
+        str(crctl_mjs()),
+        "git",
+        *args,
+        "--cwd",
+        str(ROOT),
+        "--workspace",
+        str(crctl_workspace()),
+    ]
+    proc = subprocess.run(
+        cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=str(ROOT)
+    )
     if proc.returncode != 0:
         raise AssertionError(f"controlled git {' '.join(args)} failed: {proc.stderr.strip()[:400]}")
     lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
