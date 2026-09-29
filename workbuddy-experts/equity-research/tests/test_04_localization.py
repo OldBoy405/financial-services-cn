@@ -23,6 +23,7 @@ from _support import (
     ROOT,
     SCOPE_ALLOWED_FILES,
     SCOPE_ALLOWED_PREFIXES,
+    SCOPE_VERSION_BUMP_FILES,
     SKILL_SRC,
     RepoTest,
     crctl_git,
@@ -122,7 +123,9 @@ class Localization(RepoTest):
         changed = crctl_git_lines("diff", "--name-only", "origin/workbuddy/main")
         self.assertTrue(changed, "no diff against workbuddy/main: nothing to review")
         for path in changed:
-            allowed = path in SCOPE_ALLOWED_FILES or path.startswith(SCOPE_ALLOWED_PREFIXES)
+            allowed = (path in SCOPE_ALLOWED_FILES
+                       or path in SCOPE_VERSION_BUMP_FILES
+                       or path.startswith(SCOPE_ALLOWED_PREFIXES))
             self.assertTrue(allowed, f"{path} is outside the approved scope_in (scope creep)")
         bundles = sorted(p for p in changed if p.startswith("plugins/agent-plugins/"))
         self.assertEqual(bundles, sorted(EXPECTED_BUNDLE_CHANGES),

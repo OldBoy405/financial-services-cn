@@ -93,13 +93,27 @@ SCOPE_ALLOWED_PREFIXES = (
     "scripts/export_workbuddy_experts.py",
 )
 SCOPE_ALLOWED_FILES = ("CUSTOM.md", "ARCHITECTURE.md")
+# SDD §8 scope_in amendment (Ray-approved ruling (a), 2026-09-28): the repo's
+# pre-commit hook (.githooks/pre-commit -> scripts/version_bump.py --apply)
+# force-bumps a plugin's plugin.json patch version whenever that plugin has
+# staged changes, and CI (.github/workflows/version-bump.yml) fails a PR
+# without the bump. Syncing the named-agent skill copies therefore drags these
+# three files into the diff; they are approved as version-bump artifacts only.
+SCOPE_VERSION_BUMP_FILES = (
+    "plugins/agent-plugins/earnings-reviewer/.claude-plugin/plugin.json",
+    "plugins/agent-plugins/market-researcher/.claude-plugin/plugin.json",
+    "plugins/agent-plugins/pitch-agent/.claude-plugin/plugin.json",
+)
 EXPECTED_BUNDLE_CHANGES = (
+    "plugins/agent-plugins/earnings-reviewer/.claude-plugin/plugin.json",
     "plugins/agent-plugins/earnings-reviewer/skills/earnings-analysis/SKILL.md",
     "plugins/agent-plugins/earnings-reviewer/skills/earnings-preview/SKILL.md",
     "plugins/agent-plugins/earnings-reviewer/skills/model-update/SKILL.md",
     "plugins/agent-plugins/earnings-reviewer/skills/morning-note/SKILL.md",
+    "plugins/agent-plugins/market-researcher/.claude-plugin/plugin.json",
     "plugins/agent-plugins/market-researcher/skills/idea-generation/SKILL.md",
     "plugins/agent-plugins/market-researcher/skills/sector-overview/SKILL.md",
+    "plugins/agent-plugins/pitch-agent/.claude-plugin/plugin.json",
     "plugins/agent-plugins/pitch-agent/skills/sector-overview/SKILL.md",
 )
 

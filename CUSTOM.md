@@ -9,6 +9,12 @@
 - 不移动的起始标签：`baseline/upstream-574ed36`，指向纯上游 `574ed36`；用 `git diff baseline/upstream-574ed36..workbuddy/main` 看累计二开。当前定制边界则用 `git diff main...workbuddy/main` 核对。
 - 本轮验证：`python scripts/check.py` → 82 个文件、0 问题；`python scripts/version_bump.py --check --base main` → OK。Windows 本机 `python3` 是不可用的 WindowsApps 存根，运行仓库脚本用 `python`；其他环境用实际可运行的 `python3`。
 
+## 插件版本钩子（后续 CR 必读，2026-09-28 登记）
+
+`.githooks/pre-commit`（`scripts/version_bump.py --apply`）对**任何有 staged 变更的插件目录**强制把该插件 `plugin.json` 的 version patch +1（每分支一次，恰好领先 main 一个 patch）；CI 兜底 `.github/workflows/version-bump.yml` 在 PR 改了插件但无 bump 时 exit 1。version 是已安装客户端接收更新的开关，bump 有真实投递语义。
+
+因此：后续 CR 凡任务涉及同步技能副本或以任何方式触碰插件目录，其 SDD 批准范围必须**预先**把对应 `plugin.json` 的 version bump 写进允许清单（可加「仅限 version-bump」限定），scope 测试断言同步覆盖；不事后补救、不绕钩子。首次登记：CR-2026-001（裁决 a，Ray 批准）。
+
 ## 合并冲突总则
 
 执行 `git merge main` 时，**先看《定制明细》，再按上游新代码定位定制**；没有文本冲突也照此核对。
