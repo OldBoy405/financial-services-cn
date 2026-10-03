@@ -6,10 +6,12 @@ Reads `evidence/reinstall.md` (RIN/ENV/REP + the measured export/install machine
 real and its path+sha256 set is checked against the value recorded in the ledger, so RIN-01 is recomputable
 inside the repo instead of being a transcription.
 
-Two checks are red on purpose and stay red until the target machine actually validates and installs 0.11.0:
-`test_target_validation_receipt_for_final_package` and `test_install_and_summon_receipt_for_final_package`.
-SDD §4.6/§4.7 and TASK-04 §4 forbid passing a static file comparison off as an install or summon receipt, so
-AC-08 cannot go green while `RIN-02`..`RIN-07` are gaps; TASK-04 is not signed done for that reason.
+AC-08's install-side checks stay red on purpose until the target machine's session convergence and the
+missing-permission negative are actually reproducible: `test_install_and_summon_receipt_for_final_package`
+requires a `通过` new-session row plus every `REP` row reproduced. As of round4 the 0.11.0 package IS validated,
+isolated-from-0.10.0 and installed (`RIN-02`/`RIN-04`/`RIN-05`, checked by `test_target_validation_receipt_for_final_package`),
+but `RIN-06` (new session retaining only the declared dependencies) never held in any observed session and `REP-03`
+has no permission-denied precondition left to reproduce, so TASK-04 is not signed done for that reason.
 """
 from __future__ import annotations
 
@@ -368,25 +370,41 @@ class ReinstallRepro(RepoTest):
     def test_run_window_client_version_is_measured(self) -> None:
         self.assertTrue(re.match(r"\A\d+\.\d+\.\d+", self.client_token),
                         f"index.md#RunWindow 客户端版本 {self.client_token!r} 不是实测版本号")
-        self.assertIn("待确认", self.run_window["校验器版本"],
-                      "0.11.0 未提交目标机校验，校验器版本必须保持待确认，不得预填")
+        # 校验器版本与 RIN 实测回执双向绑定：无 通过 回执时不得预填，有回执时不得滞留在 待确认（§4.6、ENV-05）。
+        cell = self.run_window["校验器版本"].split("（")[0].strip()
+        measured = set()
+        for row in self.rin:
+            if row["结果"] != "通过":
+                continue
+            validator = VALIDATOR_RE.search(row["客户端/校验器/包版本"])
+            if validator and validator.group(1) not in {"未实测", "未参与"}:
+                measured.add(validator.group(1))
+        if cell == "待确认":
+            self.assertEqual(measured, set(),
+                             "已有带实测校验器的 通过 RIN 行，校验器版本不得滞留在 待确认")
+        else:
+            self.assertIn(cell, measured,
+                          "index.md#RunWindow 校验器版本必须等于某条 通过 RIN 行的实测校验器值，不得预填")
 
-    # --- AC-08: the two receipts the target machine has not produced (red until it does) ---
+    # --- AC-08: the install-side receipts the target machine has still not produced ---
     def test_target_validation_receipt_for_final_package(self) -> None:
         passed = [r for r in self.rin if r["阶段"].startswith("目标校验") and r["结果"] == "通过"]
         self.assertTrue(
             passed,
-            "0.11.0 未提交目标机 WorkBuddy 客户端校验/注册，RIN-02 保持 阻塞（未执行）：AC-08 要求被目标版本接受的最终包校验回执。"
-            "需要建立的动作＝在目标机客户端内对导出物执行安装前校验，并登记客户端实测校验器版本与注册条目回执（installedAt/version/"
-            "installPath + 安装件 plugin.json 的 sha256）。本机无 expert-manager 通道（见 ENV-05），不自制校验器（NFR-02）。")
+            "AC-08 要求被目标版本接受的最终包校验回执：RIN-02 必须按目标机实测的 validate/register 结果签 通过，"
+            "并登记客户端实测校验器版本与注册条目回执（installedAt/version/installPath + 安装件 plugin.json 的 sha256）。"
+            "校验通道＝客户端 builtin 的 skill-expert-manager cache 副本脚本（见 ENV-05），不自制校验器（NFR-02）。")
 
     def test_install_and_summon_receipt_for_final_package(self) -> None:
         installed = [r for r in self.rin
                      if r["阶段"].startswith(("安装", "新会话")) and r["结果"] == "通过"]
         self.assertEqual(len(installed), 2,
-                         "0.11.0 未安装、无新会话回执，RIN-05/RIN-06 保持 阻塞（未执行）：静态文件比对不得充当安装/召唤回执（§4.6）。")
+                         "AC-08 要求 安装 与 新会话 两阶段都按最终包实测通过（§4.6：安装→新会话仅保留包声明依赖→实际调用）；"
+                         "静态文件比对不得充当安装/召唤回执，缺 GUI 收敛与新会话工具面时该行保持 阻塞 并写明重授权路径。")
         unrepro = [r["ID"] for r in self.rep if r["是否可复现"].strip() != "是"]
-        self.assertEqual(unrepro, [], f"REP {unrepro} 未按最终包实际复现")
+        self.assertEqual(unrepro, [],
+                         f"REP {unrepro} 未按最终包实际复现；缺权限负例的拒绝前提只能由目标账户实际成立，"
+                         "不得以 tool-not-mounted 或注入无效凭据代替（safety-branches.md#登记口径 第 4 条）。")
 
     # --- counterexamples (TASK-04 §4) ---
     def test_version_rolled_back_rejected(self) -> None:
@@ -445,7 +463,8 @@ class ReinstallRepro(RepoTest):
             home = Path(tmp) / "equity-research"
             shutil.copytree(EVIDENCE, home)
             row = next(r for r in load_table("reinstall.md", "重装后复现") if r["ID"] == "REP-02")
-            fake = [{k: v for k, v in row.items()}]
+            # 反例要测的是不变量 4 本身，不是盘上现值：未复现态显式构造，避免随 REP 行改判而失效
+            fake = [{**row, "是否可复现": "否", "结果": "阻塞（反例构造）"}]
             # 域状态表按 TASK-05 的列契约造一行 可用，断言不变量 4 会拒绝它
             dom = home / "domain-readiness.md"
             cols = _evidence.TABLE_COLUMNS["domain-readiness.md#域状态"]
