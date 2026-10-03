@@ -7,9 +7,10 @@ record's canonical SHA-256 is recomputed against the published anchor block, eve
 has to exist, the ②-no-fetch-before-licence invariant is re-run through cmd-02's own licence
 cross-check, and the Agent file's zero-diff is proved by hashing the text that precedes the one
 added section against the CR1 SHA already recorded in `index.md#CR1 输入核对`.
-TASK-03 §4 counterexamples run in-memory on mutated copies; the unreproduced scenario rows stay
-blocked and are asserted to stay blocked (the gap state is bound to four columns at once so it can
-neither be刷绿 nor be used to hide a real refusal).
+TASK-03 §4 counterexamples run in-memory on mutated copies. Since round3 every scenario row is reproduced, so each row's
+actual reply has to be bound to a record object whose canonical SHA-256 is recomputed here; the `缺口-未重现` bundling
+stays armed (a gap row can neither be刷绿 nor hide a real refusal), and `采用` — the §4.2 SBC-08 success path the §2.1
+enum cannot express — is locked to that one row and to records that really returned data (登记口径 第 2 与第 7 条).
 """
 from __future__ import annotations
 
@@ -41,6 +42,7 @@ from test_09_query_traceability import (
 
 REPLIED = {"澄清", "合格备选", "公开摘要", "停止"}
 GAP = "缺口-未重现"
+ADOPT = "采用"  # §4.1 ⑤ 的裁决词，§2.1 枚举缺该态（登记口径第 7 条），只允许 SBC-08 取
 SBC_COLUMNS = _evidence.TABLE_COLUMNS["safety-branches.md#安全分支实测"]
 ORD_STEPS = ("①", "②", "③", "④", "⑤")
 STEP_KEYWORDS = ("确认证券", "核对", "首选", "非空性", "裁决")
@@ -51,7 +53,9 @@ HEX64 = re.compile(r"\A[0-9a-f]{64}\Z")
 FIN_VALUE_RE = re.compile(r"\d+(?:[.,]\d+)?\s*(?:元|亿元|万元|港元|美元|倍|只|篇|%|％)")
 RATING_RE = re.compile(r"评级|目标价|估值")
 EXPECT_ONLY_RE = re.compile(r"预期(停止|输出|回复)")
-ID_RE = re.compile(r"\b(?:QRY|SRC|KJ|LIC|NZ|FC|VR|SMP|SBC|ORD|DOM)-\d{2}\b")
+ID_RE = re.compile(r"\b(?:QRY|SRC|KJ|LIC|NZ|FC|VR|SMP|SBC|ORD|DOM)-\d{2}(?:-[A-Z]{2,3})?\b")
+RECORD_ID_RE = re.compile(r"\bSBC-\d{2}-[A-Z]{2,3}\b")
+MS_SECONDS_RE = re.compile(r"\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?[+-]\d{2}:\d{2}\Z")
 LIC_STATUS_RE = re.compile(r"\b(LIC-\d{2}) 实际状态=([^\s，；）)）`]+)")
 ISO_SECONDS_RE = re.compile(r"\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}\Z")
 SOURCE_NAMES_RE = re.compile(
@@ -81,13 +85,22 @@ def _cells(rows: list[dict]) -> str:
 
 
 def known_ids(ord_rows: list[dict], sbc_rows: list[dict], records: dict, failures: dict,
-              lic: list[dict], vr: dict) -> set[str]:
+              lic: list[dict], vr: dict, sbc_records: dict) -> set[str]:
     ids = ({r["ID"] for r in ord_rows} | {r["ID"] for r in sbc_rows} | set(records)
-           | set(failures) | set(vr))
+           | set(failures) | set(vr) | set(sbc_records))
     for heading in ("查询溯源", "单指标单源", "口径审查", "样例登记"):
         ids |= {r["ID"] for r in load_table("queries.md", heading)}
     ids |= {r["ID"] for r in lic}
     return ids
+
+
+def returned_data(rec: dict) -> bool:
+    """The source really returned fields: 字段清单 lists field names instead of 「无…」.
+
+    期间覆盖 is not part of this test — a successful entity-recognition reply has no reporting
+    period, while the refusal blocks check that column separately (`_records_block`).
+    """
+    return not str(rec["字段清单"]).startswith("无")
 
 
 def check_ord(rows: list[dict], backings: dict[str, bool], known: set[str]) -> None:
@@ -114,7 +127,8 @@ def check_ord(rows: list[dict], backings: dict[str, bool], known: set[str]) -> N
             raise AssertionError(f"ORD 行 {row['ID']} 可观察证据引用不存在的行 {unknown}")
 
 
-def check_sbc(rows: list[dict], known: set[str], src_ids: set[str], lic_by_id: dict[str, dict]) -> None:
+def check_sbc(rows: list[dict], known: set[str], src_ids: set[str], lic_by_id: dict[str, dict],
+              sbc_records: dict[str, dict]) -> None:
     require_ids(rows, "SBC", minimum=9)
     if len(rows) != 9:
         raise AssertionError(f"SBC 行必须恰为九行（§4.2 九场景），实为 {len(rows)}")
@@ -123,13 +137,18 @@ def check_sbc(rows: list[dict], known: set[str], src_ids: set[str], lic_by_id: d
             if not row[col].strip():
                 raise AssertionError(f"SBC 行 {row['ID']} 字段 {col} 为空")
         kind = row["实际回复类别"].strip()
-        if kind not in REPLIED | {GAP}:
+        if kind not in REPLIED | {GAP, ADOPT}:
             raise AssertionError(f"SBC 行 {row['ID']} 实际回复类别 {kind!r} 不在封闭取值")
         if EXPECT_ONLY_RE.search(_cells([row])):
             raise AssertionError(f"SBC 行 {row['ID']} 以预期描述代替实际输出（§4.2「只写预期停止不算证据」）")
         unknown = [x for x in ID_RE.findall(_cells([row])) if x not in known]
         if unknown:
             raise AssertionError(f"SBC 行 {row['ID']} 证据引用指向不存在的行 {unknown}")
+        cited_records = set(RECORD_ID_RE.findall(_cells([row])))
+        ghost = sorted(cited_records - set(sbc_records))
+        if ghost:
+            raise AssertionError(
+                f"SBC 行 {row['ID']} 引用了「安全分支实测记录对象」里不存在的记录 {ghost}")
         if kind == GAP:
             if not row["契约符合性"].startswith("阻塞（未重现）"):
                 raise AssertionError(f"SBC 行 {row['ID']} 缺口行的契约符合性必须为 阻塞（未重现）")
@@ -142,6 +161,22 @@ def check_sbc(rows: list[dict], known: set[str], src_ids: set[str], lic_by_id: d
             if not row["采用源与相对差异"].startswith("不适用"):
                 raise AssertionError(f"SBC 行 {row['ID']} 缺口行不得声称采用任何源")
             continue
+        if kind == ADOPT:
+            if row["ID"] != "SBC-08":
+                raise AssertionError(
+                    f"行 {row['ID']} 取 采用：该补值是 §2.1 枚举对 §4.2 成功行的空缺裁定，只允许 SBC-08（登记口径第 7 条）")
+            if not cited_records:
+                raise AssertionError("SBC-08 的 采用 行未引用任何记录对象")
+            silent = sorted(rid for rid in cited_records if not returned_data(sbc_records[rid]))
+            if silent:
+                raise AssertionError(
+                    f"SBC-08 的 采用 行引用了源未返回数据的记录 {silent}：采用须绑定确实返回数据的实测记录")
+        if row["ID"] == "SBC-07":
+            shapes = {returned_data(sbc_records[rid]) for rid in cited_records}
+            if shapes != {True, False}:
+                raise AssertionError(
+                    "SBC-07 须同时引用一次空返回（不存在代码）与一次非空返回（歧义标的）的真实记录，"
+                    f"现引用形状={sorted(shapes)}")
         if not row["契约符合性"].startswith("符合"):
             raise AssertionError(f"SBC 行 {row['ID']} 已重现行的契约符合性必须以 符合 起首")
         if row["违规扫描裁决"] != "无违规":
@@ -250,6 +285,31 @@ def check_negative_hashes(neg: dict, anchors: dict, published: dict[str, str]) -
             raise AssertionError(f"投递件锚点 {path} 含私有绝对路径")
 
 
+def check_sbc_records(records: dict, published: dict[str, str], run_window: dict[str, str]) -> None:
+    """round3 记录对象：§2.3 七字段、毫秒级时刻落在 RunWindow 内、canonical SHA-256 逐条重算等于锚点公布值。"""
+    if set(records) != set(published):
+        raise AssertionError(f"安全分支记录键集 {sorted(records)} != 锚点公布键集 {sorted(published)}")
+    for rid, rec in records.items():
+        if tuple(rec) != VERIFY_ONLY_FIELDS:
+            raise AssertionError(f"安全分支实测记录对象/{rid} 字段 {tuple(rec)} != §2.3 verify-only 七字段")
+        for field in VERIFY_ONLY_FIELDS:
+            if not str(rec[field]).strip():
+                raise AssertionError(f"安全分支实测记录对象/{rid} 字段 {field} 为空")
+        ts = str(rec["检索时间"])
+        if not MS_SECONDS_RE.match(ts):
+            raise AssertionError(f"安全分支实测记录对象/{rid} 检索时间 {ts!r} 不是采集会话记录的毫秒级时刻")
+        check_in_run_window({"t": ts}, run_window, time_field="t")
+        m = FIN_VALUE_RE.search(json.dumps(rec, ensure_ascii=False))
+        if m:
+            raise AssertionError(
+                f"安全分支实测记录对象/{rid} 出现取数字段值 {m.group(0)!r}：verify-only 不落响应正文与字段值")
+        actual = sha256_record(rec)
+        if actual != published[rid]:
+            raise AssertionError(f"{rid} canonical SHA-256 现算 {actual} != 公布 {published[rid]}")
+        if not HEX64.match(published[rid]):
+            raise AssertionError(f"{rid} 公布值不是 64 位十六进制")
+
+
 def check_fc_precision(failures: dict, run_window: dict[str, str]) -> None:
     for rid, rec in failures.items():
         ts = str(rec["检索时间"])
@@ -302,9 +362,11 @@ class SafetyBranches(RepoTest):
         self.run_window = read_run_window()
         self.neg = load_json_block("负例核验记录对象")
         self.failures = load_json_block("失败回执摘录对象")
+        self.sbc_records = load_json_block("安全分支实测记录对象")
         self.anchors = load_json_block("投递件哈希锚点")
         self.vr = load_verify_records()
-        self.known = known_ids(self.ord_rows, self.sbc, self.neg, self.failures, self.lic, self.vr)
+        self.known = known_ids(self.ord_rows, self.sbc, self.neg, self.failures, self.lic, self.vr,
+                               self.sbc_records)
         self.src_ids = {r["ID"] for r in self.src}
         self.lic_by_id = {r["ID"]: r for r in self.lic}
 
@@ -331,7 +393,7 @@ class SafetyBranches(RepoTest):
 
     # --- AC-07: nine scenarios, SBC-01/SBC-02 independent, no expectation-only rows ---
     def test_sbc_rows(self) -> None:
-        check_sbc(self.sbc, self.known, self.src_ids, self.lic_by_id)
+        check_sbc(self.sbc, self.known, self.src_ids, self.lic_by_id, self.sbc_records)
 
     def test_sbc01_and_sbc02_independent(self) -> None:
         check_sbc01_02_independent(self.sbc)
@@ -349,6 +411,9 @@ class SafetyBranches(RepoTest):
 
     def test_negative_records_match_published_hashes(self) -> None:
         check_negative_hashes(self.neg, self.anchors, self.anchors["负例记录canonicalSHA256"])
+
+    def test_sbc_records_match_published_hashes(self) -> None:
+        check_sbc_records(self.sbc_records, self.anchors["安全分支记录canonicalSHA256"], self.run_window)
 
     def test_failure_records_keep_source_precision(self) -> None:
         check_fc_precision(self.failures, self.run_window)
@@ -404,13 +469,13 @@ class SafetyBranches(RepoTest):
     def test_dropped_sbc02_row_rejected(self) -> None:
         bad = [r for r in self.sbc if r["ID"] != "SBC-02"]
         with self.assertRaises(AssertionError):
-            check_sbc(bad, self.known, self.src_ids, self.lic_by_id)
+            check_sbc(bad, self.known, self.src_ids, self.lic_by_id, self.sbc_records)
 
     def test_normal_output_category_rejected(self) -> None:
         bad = [dict(r) for r in self.sbc]
         bad[0]["实际回复类别"] = "照常输出"
         with self.assertRaises(AssertionError):
-            check_sbc(bad, self.known, self.src_ids, self.lic_by_id)
+            check_sbc(bad, self.known, self.src_ids, self.lic_by_id, self.sbc_records)
 
     def test_unsourced_figure_in_row_rejected(self) -> None:
         bad = [dict(r) for r in self.sbc]
@@ -432,21 +497,21 @@ class SafetyBranches(RepoTest):
         row = next(r for r in bad if r["ID"] == "SBC-03")
         row["实际回复类别"] = GAP
         with self.assertRaises(AssertionError):
-            check_sbc(bad, self.known, self.src_ids, self.lic_by_id)
+            check_sbc(bad, self.known, self.src_ids, self.lic_by_id, self.sbc_records)
 
     def test_green_row_cannot_be_declared_blocked(self) -> None:
         bad = [dict(r) for r in self.sbc]
         row = next(r for r in bad if r["ID"] == "SBC-03")
         row["契约符合性"] = "阻塞（未重现）"
         with self.assertRaises(AssertionError):
-            check_sbc(bad, self.known, self.src_ids, self.lic_by_id)
+            check_sbc(bad, self.known, self.src_ids, self.lic_by_id, self.sbc_records)
 
     def test_public_summary_without_src_ref_rejected(self) -> None:
         bad = [dict(r) for r in self.sbc]
         row = next(r for r in bad if r["实际回复类别"] == "公开摘要")
         row["证据引用"] = "QRY-06、QRY-07、QRY-08"
         with self.assertRaises(AssertionError):
-            check_sbc(bad, self.known, self.src_ids, self.lic_by_id)
+            check_sbc(bad, self.known, self.src_ids, self.lic_by_id, self.sbc_records)
 
     def test_missing_licence_annotation_rejected(self) -> None:
         bad = [dict(r) for r in self.sbc]
@@ -454,14 +519,14 @@ class SafetyBranches(RepoTest):
         row["输入/受控条件"] = "同一账户、同一入参的真实拒绝（未记许可判定面）"
         row["证据引用"] = "NZ-04；queries.md#交付边界与事实注记"
         with self.assertRaises(AssertionError):
-            check_sbc(bad, self.known, self.src_ids, self.lic_by_id)
+            check_sbc(bad, self.known, self.src_ids, self.lic_by_id, self.sbc_records)
 
     def test_licence_status_drift_rejected(self) -> None:
         lic = [dict(r) for r in self.lic]
         lic[0]["状态"] = "待确认"  # LIC-01 wind-finance 本机自用
         by_id = {r["ID"]: r for r in lic}
         with self.assertRaises(AssertionError):
-            check_sbc(self.sbc, self.known, self.src_ids, by_id)
+            check_sbc(self.sbc, self.known, self.src_ids, by_id, self.sbc_records)
 
     def test_tampered_negative_record_rejected(self) -> None:
         neg = {k: dict(v) for k, v in self.neg.items()}
@@ -469,6 +534,50 @@ class SafetyBranches(RepoTest):
         neg[first]["结果状态"] = neg[first]["结果状态"] + "（改写）"
         with self.assertRaises(AssertionError):
             check_negative_hashes(neg, self.anchors, self.anchors["负例记录canonicalSHA256"])
+
+    def test_tampered_sbc_record_rejected(self) -> None:
+        recs = {k: dict(v) for k, v in self.sbc_records.items()}
+        first = sorted(recs)[0]
+        recs[first]["结果状态"] = recs[first]["结果状态"] + "（改写）"
+        with self.assertRaises(AssertionError):
+            check_sbc_records(recs, self.anchors["安全分支记录canonicalSHA256"], self.run_window)
+
+    def test_sbc_record_outside_run_window_rejected(self) -> None:
+        recs = {k: dict(v) for k, v in self.sbc_records.items()}
+        first = sorted(recs)[0]
+        recs[first]["检索时间"] = "2026-10-03T23:59:59.000+08:00"
+        with self.assertRaises(AssertionError):
+            check_sbc_records(recs, self.anchors["安全分支记录canonicalSHA256"], self.run_window)
+
+    def test_adopt_value_on_another_row_rejected(self) -> None:
+        bad = [dict(r) for r in self.sbc]
+        row = next(r for r in bad if r["ID"] == "SBC-04")
+        row["实际回复类别"] = ADOPT
+        with self.assertRaises(AssertionError):
+            check_sbc(bad, self.known, self.src_ids, self.lic_by_id, self.sbc_records)
+
+    def test_adopt_row_without_returned_data_rejected(self) -> None:
+        bad = [dict(r) for r in self.sbc]
+        row = next(r for r in bad if r["ID"] == "SBC-08")
+        row["证据引用"] = "SBC-07-NC；`LIC-07 实际状态=已确认`"
+        with self.assertRaises(AssertionError):
+            check_sbc(bad, self.known, self.src_ids, self.lic_by_id, self.sbc_records)
+
+    def test_sbc07_one_shape_only_rejected(self) -> None:
+        bad = [dict(r) for r in self.sbc]
+        row = next(r for r in bad if r["ID"] == "SBC-07")
+        for col in ("输入/受控条件", "采用源与相对差异", "契约符合性"):
+            row[col] = "（本项引用只留证据列）"
+        row["证据引用"] = "SBC-07-AT；`LIC-07 实际状态=已确认`"
+        with self.assertRaises(AssertionError):
+            check_sbc(bad, self.known, self.src_ids, self.lic_by_id, self.sbc_records)
+
+    def test_fabricated_sbc_record_id_rejected(self) -> None:
+        bad = [dict(r) for r in self.sbc]
+        row = next(r for r in bad if r["ID"] == "SBC-07")
+        row["证据引用"] = "SBC-07-NC、SBC-07-XX；`LIC-07 实际状态=已确认`"
+        with self.assertRaises(AssertionError):
+            check_sbc(bad, self.known, self.src_ids, self.lic_by_id, self.sbc_records)
 
     def test_fabricated_seconds_in_failure_record_rejected(self) -> None:
         failures = {k: dict(v) for k, v in self.failures.items()}
