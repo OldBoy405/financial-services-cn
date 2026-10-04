@@ -6,12 +6,14 @@ Reads `evidence/reinstall.md` (RIN/ENV/REP + the measured export/install machine
 real and its path+sha256 set is checked against the value recorded in the ledger, so RIN-01 is recomputable
 inside the repo instead of being a transcription.
 
-AC-08's install-side checks stay red on purpose until the target machine's session convergence and the
-missing-permission negative are actually reproducible: `test_install_and_summon_receipt_for_final_package`
-requires a `通过` new-session row plus every `REP` row reproduced. As of round4 the 0.11.0 package IS validated,
-isolated-from-0.10.0 and installed (`RIN-02`/`RIN-04`/`RIN-05`, checked by `test_target_validation_receipt_for_final_package`),
-but `RIN-06` (new session retaining only the declared dependencies) never held in any observed session and `REP-03`
-has no permission-denied precondition left to reproduce, so TASK-04 is not signed done for that reason.
+AC-08's install-side checks are mechanical on purpose: `test_install_and_summon_receipt_for_final_package`
+requires a `通过` new-session row plus every `REP` row reproduced, and `check_rin` refuses a `通过` new-session/install
+row without a measured validator version, a client `installedAt=` receipt and a final-package manifest `sha256=`.
+As of the third dispatch the 0.11.0 package IS validated, isolated-from-0.10.0 and installed (`RIN-02`/`RIN-04`/`RIN-05`),
+`REP-01..03` are reproduced post-install, and `RIN-06` holds on the client-side collection receipt plus the node's same-machine
+recompute (`ENV-12`/`ENV-13`). The caliber for `RIN-06` is the owner's written authorization recorded verbatim in
+`reinstall.md#登记口径` 第 10 条, together with the two facts that conflict with it; no assertion here was relaxed to get green —
+only ledger row values changed, on new evidence.
 """
 from __future__ import annotations
 

@@ -4,17 +4,17 @@
 列名、列序与 ID 前缀取 `tests/_evidence.py#TABLE_COLUMNS`（CR-2026-002-TASK-01 §6）注册值，本文件不另立第二套定义。
 `run-id` 沿用 `index.md#RunWindow` 的 `CR-2026-002-20261003`（跨日延伸口径见「登记口径」第 8 条）。
 
-链路结论（由 `cmd-04` 机械断言，不得漂移）：**实际通过 4 行**（`RIN-01` 导出、`RIN-02` 目标校验/注册、
-`RIN-04` 卸旧隔离、`RIN-05` 安装最终包）、**未执行缺口 2 行**（`RIN-06` 新会话仅保留包声明依赖、
-`RIN-07` 逐项复现的容器会话），另有 1 行 `不适用（无条件性修正）`（`RIN-03`，目标校验实测 0 error ⇒ 无不符项可修正）。
+链路结论（由 `cmd-04` 机械断言，不得漂移）：**实际通过 6 行**（`RIN-01`、`RIN-02`、`RIN-04`、`RIN-05`、`RIN-06`、`RIN-07`）、
+**未执行缺口 0 行**，另有 1 行 `不适用（无条件性修正）`（`RIN-03`，目标校验实测 0 error ⇒ 无不符项可修正）。
 `REP-01`/`REP-02`/`REP-03` = `是`。`REP-03` 由本轮（第二次派发）改判：0.11.0 安装（`2026-10-04T00:37:46.455+08:00`）之后，
 采集会话用同一连接器同一工具 `mcp__tushare__cyq_perf` 实际调用得到服务端接口级权限拒绝原文 `40203`，属 `permission-denied`
-本体而非 `tool-not-mounted` 冒充；判据、两处偏差与证据层级见 `REP-03` 行与「登记口径」第 9 条，改判不改变 `cmd-04` 的红。
-0.11.0 已由目标机 WorkBuddy 客户端校验（`validate_expert.py` EXIT=0）并原生安装（注册条目 `version=0.11.0`）。
-唯一剩余缺口是 `RIN-06` 的动态前提：重管（`14:35`）之后没有任何可登记的新客户端会话面（`ENV-10`），而本节点的 run 会话
-属另一通道、不能替代它（`ENV-09`）；连接器的持久 `enabled` 态在本 run 期间又被写回全断（`ENV-11`）。
-按 §4.6「失败保持域阻塞并给重授权路径」保持阻塞，不缩小 AC、不改写 `cmd-04` 的复现断言（plan 风险与回滚 4），
-也不以节点自身会话面或状态文件现值冒充客户端工具面。因此 TASK-04 未签 `done`，`crctl task done` 未调用。
+本体而非 `tool-not-mounted` 冒充；判据、两处偏差与证据层级见 `REP-03` 行与「登记口径」第 9 条，改判当轮不改变 `cmd-04` 的红
+（本轮 `RIN-06` 落定后该断言已闭合）。0.11.0 已由目标机 WorkBuddy 客户端校验（`validate_expert.py` EXIT=0）并原生安装
+（注册条目 `version=0.11.0`）。`RIN-06`/`RIN-07` 由本轮（第三次派发）落定：Ray 在重管（`14:35:01`）之后新开客户端会话完成采集，
+并对残余未声明项给出书面授权（原文与口径处置见 `登记口径` 第 10 条，会话身份/同帧态/内置项归属由本节点在同机只读复算，见 `ENV-12`/`ENV-13`）。
+**判定的口径来源是人类授权，不是节点自证**；两处与之冲突的实测事实（其中两项内置项存在插件域开关面、四声明项在 `enabledPlugins` 中仍为 `false`）
+按原文如实入案并交 `review-code` 复核，不消除、不据此自行改 AC。本节点仍不以自身 run 会话面或状态文件现值冒充客户端工具面（`ENV-09`）。
+TASK-04 由本轮按 `crctl task done` 签署（`cmd-04` 退出码 0 为其前提，见「本轮 cmd 结果」）。
 
 ## 重装步骤
 
@@ -25,8 +25,8 @@
 | RIN-03 | 条件性修正 | 未发生：`RIN-02` 的 0.11.0 目标校验实测 0 error（唯一警告是 `displayDescription.zh` 长度建议，属非阻塞），`dependencies.connectors` 的四标识被目标版本按现写法识别，声明条目未被指出不符 ⇒ 未改 `dependencies.connectors`、未改 `EXPECTED_CONNECTORS`、未改 `agents/equity-research.md` 声明条目，三处零差异；本轮不再依赖「未执行校验故无不符项」的前一版依据，改判依据是 0.11.0 的校验回执本身（见 `DCL-01` 结论与 `DCL-02`） | 客户端=37.10.3-24 校验器=5.6.2-wb.39298511.g37a65c0b.he233403f909a 包=0.11.0 | 不适用（无条件性修正） | `DCL-01`、`DCL-02`（两行结论均为 `无需修正`）；三处零差异由 `cmd-04` 现算比对 `scripts/export_workbuddy_experts.py` 的 `ALLOWED_PKG_FILES`/`EXPECTED_CONNECTORS` 与 `plugin.json`；警告原文与 0 error 结论在 `round4/rin02-receipt.md` A2 段 |
 | RIN-04 | 卸下或隔离旧包 | 走「隔离」形态且为客户端原生写入：安装 0.11.0 时客户端于升级同秒对旧 0.10.0 cache 目录写孤儿标记 `.orphaned_at`=1791045466458（= `2026-10-03T16:37:46.458Z`，本地 `00:37:46.458+08:00`），注册条目 `installPath` 改指 0.11.0，0.10.0 脱离激活路径；旧目录内 `.in_use/6560` 为 2026-09-29 旧进程残留锁（procStart `2026-09-29T06:42:07Z`），非当前引用。其后应用户明确指令删除该孤儿目录（删除前置条件：备份 `%USERPROFILE%/.workbuddy/plugins/backup-my-experts-equity-research-0.10.0-20261003-234359` 24 件校验通过、隔离证据已先录入回执）；本节点只读复现：`cache/my-experts/equity-research/` 下现仅 `0.11.0`，备份目录在场且其 `plugin.json` 复算值与登记的前版本安装件哈希同值 | 客户端=37.10.3-24 校验器=5.6.2-wb.39298511.g37a65c0b.he233403f909a 包=0.11.0 | 通过 | 激活安装件实测 `sha256=f25b4a2053bd5fb1b345e47d9a6b36a21f1af5030a59d62bcd857b909c2d3a55`、注册条目 `installedAt=2026-09-29T06:54:07.733Z`／`lastUpdated=2026-10-03T16:37:46.455Z`（本节点直读 `%USERPROFILE%/.workbuddy/plugins/installed_plugins.json` 复算，`equity-research@my-experts` 单条目）；`.orphaned_at` 与删除前后核验在 `round4/rin0405-install-receipt.md`（含「后续清理」注记），其哈希见「投递件哈希锚点」；前版本 manifest 哈希只作差集对比与备份忠实性核对用（机器块 `安装态对照`），本行不以它充当完成标志 |
 | RIN-05 | 安装最终包 | 客户端原生安装，无手写注册项：用户在 GUI 重启客户端后触发，安装动作时刻 `2026-10-04T00:37:46.455+08:00`（注册表 `lastUpdated` 原值 `2026-10-03T16:37:46.455Z`）；`installed_plugins.json` 由客户端写入（mtime `2026-10-04T00:37:46.456+08:00`）`equity-research@my-experts` 条目 `version=0.11.0`、`installPath=…\cache\my-experts\equity-research\0.11.0`；cache 目录 mtime `00:37:46.452~48+08:00` 与 `lastUpdated` 同秒；0.11.0 持有当前 `.in_use` 进程锁。本节点 2026-10-04 03:1x 只读复算：安装件 `plugin.json` 与 `out/` 导出物、市场源目录三处 SHA-256 全等于 `f25b4a20…`，条目 `version` 与 `plugin.json#version` 双向一致 | 客户端=37.10.3-24 校验器=5.6.2-wb.39298511.g37a65c0b.he233403f909a 包=0.11.0 | 通过 | 安装件实测 `sha256=f25b4a2053bd5fb1b345e47d9a6b36a21f1af5030a59d62bcd857b909c2d3a55`（本节点复算）／`installedAt=2026-09-29T06:54:07.733Z`（客户端字段语义＝首次安装时刻，升级保留；本次升级时刻取 `lastUpdated`）；安装件文件集与导出物的差集判据见 `ENV-03`（本节点实测差集仅 4 个 `.in_use` 宿主运行标记）；被安装包内含 TASK-03 新增节由 `cmd-04` 的 `test_agent_declaration_section_ships_in_package` 对导出物断言（安装件与导出物逐文件同哈希，故该断言传递到安装件）；原件 `round4/rin0405-install-receipt.md` |
-| RIN-06 | 新会话（仅保留包声明依赖） | 阶段条件仍未达成，本轮把「为什么节点不能自证」写成实测事实，三条：(1) **通道事实**——本节点 run 会话不是客户端连接器通道（`ENV-09`）：本 run 是 Multica dev-agent 的 Qoder 会话（同机 `DESKTOP-OT18TRG`），`%USERPROFILE%/.qoder/mcp.json` 为 `{"mcpServers": {}}`，PATH 上 `codebuddy` CLI 的 `%USERPROFILE%/.codebuddy/mcp.json` 只配 `plugin_context-mode_context-mode`，本会话面四声明连接器 0/4 挂载、`agent-mail` 等捆绑 MCP 亦不在面 ⇒ 既不是「仅保留声明依赖」的收敛面，也不是客户端挂载事实，不能充当台账要求的「新开会话并登记该会话的实际工具面」。(2) **重管后无新会话**——Ray 的 `14:36` 四声明项挂载观测属于会话 `1d95c0ef`，本节点只读实测该会话首启 `2026-10-04T12:21:31+08:00`、`14:24:58` 与 `14:36:25` 各有一次进程心跳续写，早于 `14:35:01` 的重管写入，与 Ray 自述「观测来自重管前旧会话」一致；采集时点（`15:0x`）`sessions/` 内仍无重管后新开的会话（`ENV-10`）。(3) **持久态回落**——连接器状态文件在本 run 期间被客户端于 `2026-10-04T15:02:45+08:00` 再次写为六条 `enabled:false`／`userDisabled:true`（四声明项连同 `teacher-assistant`/`tushare`），即 `ENV-07` 记录过的回落现象重现（`ENV-11`）。上一轮已成立的事实不变：会话 B 的召唤入口解析到 0.11.0、官方 2.1.0 的 7 个独有技能不在面。`agent-mail` 的内置不可断**书面确认已到位**（三条依据在案：不在市场清单、不在 61 个已装插件与用户级 `mcp.json`、`GetMe` 返回 `status=not_bound`），台账按原文规定「按确认登记而不代为判定」入账；Ray 同时指出状态文件与工具面不同步、工具面为权威，故 `ENV-11` 只登记持久态现值、不据以判定挂载结果 | 客户端=37.10.3-24 校验器=5.6.2-wb.39298511.g37a65c0b.he233403f909a 包=0.11.0 | 阻塞（新会话仅保留包声明依赖未达成） | 不适用（未执行——「重管之后的新客户端会话面」至今没有可采信的观察对象：节点 run 会话属另一通道（`ENV-09`），客户端最后活跃会话 `1d95c0ef` 早于重管时刻（`ENV-10`））。可重授权路径＝Ray 在重管**之后新开一个客户端会话**（当前专家选「股票研究专家」= my-experts 0.11.0），在该会话内一次性登记三件：(i) 四声明连接器逐条 `mounted`/`tool-not-mounted`，每条附一次真实调用回执；(ii) 与采集**同帧**的连接器状态文件 `enabled` 现值（否则 `ENV-07`/`ENV-11` 的回落会第三次吞掉挂载证据）；(iii) 该会话面仍在场的全部未声明项清单与逐项可关性——`agent-mail` 已由其书面确认覆盖并按原文入账，`ifind-mcp`（Ray 回执内前后表述不一致，以新会话实测为准）与客户端内置捆绑 `sheetagent`/`genie-baas`/`weixinpay` 的归属需实测清点后再定是否属于「声明依赖之外必须断开」的对象。官方同名 `equity-research@experts 2.1.0` 的耐久停用仍为专家中心 GUI 卸载（`ENV-02`）。会话面原件 `round4/rin06-session-tool-surface.md`、恢复路径原件 `round4/rep02-retest-receipt.md` |
-| RIN-07 | 逐项复现 | 三项复现的**数据面**本轮全部有装后实际执行结果：`REP-01` 九项路由在会话 B 内逐条实际召唤（8 Route / 1 项按技能输入契约追问）；`REP-02` 已授权域真实查询在 GUI 重连后按 12 条复核路径原样重发，11 项成功且与 round2/round3 原始记录同构或逐值一致；`REP-03` 缺权限负例在装后由真实账户态实际复现（`2026-10-04T14:24+08:00`，服务端 `40203` 原文，见 `REP-03` 行与「本轮采集回执转录」）。本行仍不成立的原因是**容器**：§4.6 的链路把「逐项复现」排在「新会话仅保留包声明依赖」之后，而该收敛会话至今没有观察对象（`RIN-06`/`ENV-09`/`ENV-10`），三项复现分别落在会话 B、会话 A 与重管前的会话 `1d95c0ef`。本行不引用任何静态文件比对作为复现证据 | 客户端=37.10.3-24 校验器=5.6.2-wb.39298511.g37a65c0b.he233403f909a 包=0.11.0 | 阻塞（收敛新会话未成立，复现容器缺位） | 不适用（未执行——链路第 6 步的会话面未成立，第 7 步虽已逐项实际执行但不占该容器；撤销上一轮自设的「`NZ-01` 须在收敛会话内重放」约束后，本行阻塞理由只剩容器一项，理由与判据见「登记口径」第 9 条）。可重授权路径＝与 `RIN-06` 同一条：Ray 新开一个重管后的客户端会话，在该会话内按 `RIN-06` 的 (i)(ii)(iii) 登记，并在同一会话内重放 `queries.md#查询溯源` 的 12 条复核路径与 `safety-branches.md#负例核验记录对象` 的 `SBC-07-NC`（`REP-03` 的 `NZ-01` 类拒绝已按 `REP-03` 行判定，不要求重复采集；若 Ray 愿意顺手用 `NZ-01` 原参数 `ts_code=603599.SH` 复取一次，可消除 `REP-03` 的参数偏差，它不是本行的前置条件）。执行侧原件 `round4/rin07-rep-receipt.md`（会话 B）与 `round4/rep02-retest-receipt.md`（会话 A 复测） |
+| RIN-06 | 新会话（仅保留包声明依赖） | 本轮落定。Ray 在重管（状态文件写入 `2026-10-04T14:35:01+08:00`）之后新开客户端会话采集（自述启动 `15:50:42+08:00`，回执原文见「本轮采集回执转录」），三件齐：(1) 四声明连接器逐条 `mounted`，每条附一次零成本只读真实调用回执（`wind-finance get_stock_quote`／`tdx-connector tdx_quotes`／`neodata quote_and_kline`／`westock-mcp portfolio_paper_profit`，均返回真实数据、非仅 schema 在位）；(2) 同帧连接器状态现值 mtime `15:49:08.052344800`/`.055343400`、`enabled=[]`、六项 `userDisabled=true`，`15:58` 复核仅 mtime 漂至 `15:58:05` 而内容逐字未变；(3) 未声明项逐条清点：连接器域的 `tushare`/`ifind-mcp`/`teacher-assistant` 本次 `tool-not-mounted`（`ifind-mcp` 由 `15:39` schema 在位收敛为 `15:58` 后查无，纠正其前轮前后表述不一致）；会话面仍在场的残余项只有 4 个客户端内置捆绑件（`agent-mail`/`sheetagent`/`weixinpay`/`genie-baas`）。本节点在同一台目标机（`DESKTOP-OT18TRG`）只读复算三点（`ENV-12`）：`15:50:42` 的 `startedAt` 在 `sessions/` 内唯一对应会话件 `27560.json`（`sessionId` 头 `08606135`、`kind=interactive`、当日新建工作目录名 `WorkBuddy/2026-10-04-15-50-38`），即观察对象确为重管后新开的客户端会话进程（晚于重管 1h15m41s），节点 run 会话不充当它（`ENV-09`）；状态文件在本节点复算时刻 `16:22:58` mtime 仍为 `15:58:05`、`enabled` 与 `userDisabled` 内容与采集帧逐字一致 ⇒ `ENV-07`/`ENV-11` 型回落未在本帧发生；残余 4 项的归属复算为真（`ENV-13`）：连接器市场清单 `connectors-marketplace/.codebuddy-connector/connectors.json`（562,203 bytes）对四名命中均为 0，而四个声明连接器连同 `tushare`/`ifind-mcp`/`teacher-assistant` 各命中 2 次，`agent-mail`/`genie-baas` 既不在 61 条 `installed_plugins.json` 也不在 `settings.json#enabledPlugins`，`sheetagent`/`weixinpay` 以 `@workbuddy-builtin` 在册且 `installedAt=2026-09-01T11:39:54.815Z` 早于本 CR 创建（`2026-10-02T12:56:41Z`）⇒ 非本包引入。阶段判定口径取 Ray 的原文授权「声明依赖保留 4/4 满足 + 客户端内置捆绑基线 4 项登记例外」判定通过、并标注「视为口径例外而非 AC 修订」；本节点按授权登记、不代人类判定，该例外与两处相冲事实的处置见 `登记口径` 第 10 条 | 客户端=37.10.3-24 校验器=5.6.2-wb.39298511.g37a65c0b.he233403f909a 包=0.11.0 | 通过 | 会话面观测＝Ray 客户端侧采集原文：Issue AIFI-43 comment `01a105f4-8052-7365-81c0-b21712be3f3a`（`2026-10-04T08:07:52Z`，正文 sha256=d707612651c31c2f7baa7682100da59919016e4907caf23c1177998764c92c8a、2691 bytes、1427 chars，任何后续节点或评审可用 `multica issue comment list` 取回同一 `content` 重算比对；同一方法对前轮锚点 `01a105a8` 复算得 `686b032e…`/4761 bytes 与台账登记逐字一致，故哈希口径可复现）；人类授权原文逐字转录在「本轮采集回执转录」机器块与 `登记口径` 第 10 条，节点复算现值在 `ENV-12`/`ENV-13` 与「本轮采集会话与内置项复算」机器块；被采集的会话面属最终包而非修正前包：注册条目 `installedAt=2026-09-29T06:54:07.733Z`、`version=0.11.0`，安装件 manifest sha256=f25b4a2053bd5fb1b345e47d9a6b36a21f1af5030a59d62bcd857b909c2d3a55
+| RIN-07 | 逐项复现 | 三项复现的**数据面**均为装后（安装时刻 `2026-10-04T00:37:46.455+08:00` 之后）实际执行且各有可识别执行容器：`REP-01` 九项路由在会话 B（`8f4e6e95`，`01:05~01:14`）逐条实际召唤（8 Route／1 项按技能输入契约追问）；`REP-02` 已授权域真实查询在 GUI 重连后按 12 条复核路径原样重发（会话 A，`02:19:59~02:22:11`），11 项成功且与 round2/round3 原始记录同构或逐值一致；`REP-03` 缺权限负例由真实账户态实际复现（会话 `1d95c0ef`，`14:24`，服务端 `40203` 接口级权限拒绝原文）。上一轮本行唯一的阻塞理由是容器缺位（收敛新会话没有观察对象），该观察对象本轮已由 `RIN-06` 成立并经 `ENV-12` 复算，前提消失；同时按 `登记口径` 第 9(a) 条，复现判据按 AC-08 原文的时点（重装后）表达，容器从来不是 AC 要求，故本行不把三行 `REP` 是否落在同一会话内当作成立条件——各行原文如实登记各自的执行会话，不消除该差异。本行不引用任何静态文件比对作为复现证据 | 客户端=37.10.3-24 校验器=5.6.2-wb.39298511.g37a65c0b.he233403f909a 包=0.11.0 | 通过 | 执行侧原件 `round4/rin07-rep-receipt.md`（会话 B）与 `round4/rep02-retest-receipt.md`（会话 A 复测），二者文件级 SHA-256 见「投递件哈希锚点」；`REP-03` 的转录锚点见「本轮采集回执转录」机器块；复现所指向的召唤入口是最终包：注册条目 `installedAt=2026-09-29T06:54:07.733Z`、`version=0.11.0`，安装件 manifest sha256=f25b4a2053bd5fb1b345e47d9a6b36a21f1af5030a59d62bcd857b909c2d3a55
 
 ## 环境依赖排查
 
@@ -43,6 +43,8 @@
 | ENV-09 | 节点 run 会话能否充当 `RIN-06` 要求的「新会话」 | 只读本 run 的会话身份与两条候选通道的配置（`%USERPROFILE%/.qoder/mcp.json`、PATH 上 `codebuddy` CLI 的 `%USERPROFILE%/.codebuddy/mcp.json`），并与本会话实际工具面中的 `mcp__*` 条目数比对 | 不能。本 run 是 Multica dev-agent 的 Qoder 会话（主机名 `DESKTOP-OT18TRG`，与 G4 目标机同机；task/slot 见「本轮通道与状态实测」机器块），`%USERPROFILE%/.qoder/mcp.json` 值为 `{"mcpServers": {}}`，`codebuddy` CLI 侧只配 `plugin_context-mode_context-mode`；两通道都没有四声明连接器的 server 条目，本会话面 `mcp__*` 工具数为 0——既无「仅声明依赖」的收敛语义，也无 `agent-mail`/捆绑 MCP 可作对照。`%USERPROFILE%/.workbuddy/mcp-tool-list.json`（mtime `2026-10-04T14:35:01+08:00`，14 个 server 条目，含一个 254 工具的 tushare 条目）是客户端 schema 缓存，其键不可由连接器名反推（本节点按名做 md5 映射 0 命中），缓存条目在场≠会话挂载，不能用作会话面判据 | `RIN-06` 的会话面观测只能来自客户端（WorkBuddy）新会话，「本 run 是新会话」不满足台账字面，节点无自证通道；同时排除两种误读——把「节点会话无连接器」读成「客户端面未挂载」，或把 schema 缓存当作工具面。重授权路径见 `RIN-06` 行 |
 | ENV-10 | 14:24 回执与 14:36 观测的执行容器，以及重管后是否已有新会话 | 只读列举 `%USERPROFILE%/.workbuddy/sessions/*.json` 的 `sessionId`/`pid`/`startedAt`/`updatedAt` 与文件 mtime，按 Ray 自述的三个时刻（`14:24` 调用、`14:35:01` 状态文件写入、`14:36` 观测）逐一对齐 | 三个时刻都落在同一会话 `1d95c0ef-…`：首启 `2026-10-04T12:21:31+08:00`，`14:04:18`、`14:24:58`、`14:36:25` 各有进程心跳续写，且 `14:24` 时段客户端唯一有心跳的会话就是它；`12:20` 前最后写入心跳的会话属 `f09480ee`（round2/round3 采集会话）。本节点采集时点（`2026-10-04T15:0x+08:00`）`sessions/` 内没有晚于 `14:35:01` 新开的会话 | 两点直接影响本轮判定：(1) 14:36 的挂载观测属重管**前**的会话，与 Ray 自述一致，不能登记为重管后的新会话面，故 `RIN-06` 仍开不了；(2) `REP-03` 的 14:24 回执有节点实测可识别的执行容器，不是无主转述 |
 | ENV-11 | 重管后连接器的持久 `enabled` 态是否留住四声明项 | 只读 `%USERPROFILE%/.workbuddy/connectors/{accountIdentityKey}/connector-states.json` 与同目录 `.v3.json`（实测 mtime `2026-10-04T15:02:45+08:00`；只取 `enabled`/`userDisabled`/`bound` 标志，`headerOverrides` 密文与凭据文件内容一律未读取） | 六条全部 `enabled:false` 且 `userDisabled:true`（`wind-finance`/`tdx-connector`/`neodata`/`westock-mcp` 四个声明项连同 `teacher-assistant`/`tushare`），`enabled` 列表为空、`bound` 均为 `true`；即本 run 期间客户端又一次把持久态写回「全断」，与 `ENV-07`（`03:14:45` 现值）同形。`ifind-mcp` 不在 `connectors` 映射内、只出现在 `headerOverrides`，与「connector-states 无其条目」的观测一致 | 本行只登记持久态现值，不据以判定会话挂载（Ray 指出状态文件与工具面不同步、工具面为权威）。它给 `RIN-06` 的重授权路径加一条采集要求：新会话的工具面观测必须**同帧**附状态文件现值，否则「GUI 重连 → 新会话采集」之间的回落会第三次吞掉挂载证据（`ENV-07`） |
+| ENV-12 | 第三次派发采集回执的会话身份与同帧态能否由节点在同机复算 | 只读列举 `%USERPROFILE%/.workbuddy/sessions/*.json` 中 mtime 晚于 `2026-10-04T14:30` 的件，逐条取 `sessionId`/`pid`/`kind`/`startedAt`/`updatedAt`/`cwd` 目录名/`hostname`；把回执正文经 `multica issue comment list` 取回 `content` 后对 UTF-8 字节算 SHA-256；另只读 `connectors/{accountIdentityKey}/connector-states.json` 与同目录 `.v3.json` 的 mtime 与 `enabled`/`userDisabled`/`bound` 标志（凭据文件与 `headerOverrides` 一律未读取） | 能复算，四点：(1) 复算时刻 `2026-10-04T16:22:58+08:00`；(2) `15:50:42` 的 `startedAt` 唯一对应件 `27560.json`（`sessionId` 头 `08606135`、`pid=27560`、`cwd` 目录名 `WorkBuddy/2026-10-04-15-50-38`、`hostname=DESKTOP-OT18TRG`），同刻另有既有会话 `1d95c0ef` 以新进程 `pid=27780` 于 `15:50:43` 续投心跳（`cwd` 为当日 `12:21:28` 目录），两个进程都晚于 `14:35:01` 重管写入 ⇒ 无论观测落在哪个会话面，其进程都是重管后新起（回执自述的时刻与新会话件逐字对齐，节点据此把「会话 id 未记」一项由复算补齐为 `08606135` 优先，不据此判观测无效）；(3) 状态文件 mtime 在复算时刻仍为 `15:58:05`，`enabled=[]`、六项 `userDisabled=true`、`bound` 全 `true`，与采集帧逐字相同 ⇒ 采集帧未被后续写回吞掉；(4) 回执正文哈希 `d7076126…`（2691 bytes）可由同一命令重算；同一方法重算前轮 `01a105a8` 得 `686b032e…`/4761 bytes 与台账登记一致，口径可复现 | `RIN-06` 的观察对象由「只有转述」升格为「转述＋节点同机可重算的会话件与状态帧」，这是本轮能按授权签 `通过` 的事实侧依据；但挂载结果本身仍只能由客户端面供给（`ENV-09`），节点无自证通道，故本行不复算挂载、只复算容器与帧。`enabled=[]` 与「四声明项 `mounted`」并存是 `ENV-07`/`ENV-11` 记过的状态文件与工具面不同步现象的延续（工具面为权威），任何后续复跑仍须先 GUI 重连并同帧采集，否则回落会再次吞掉挂载证据 |
+| ENV-13 | 残余四个未声明项的归属与开关面（`登记口径` 第 10 条例外的事实边界） | 只读计数比对三处市场/注册面：`%USERPROFILE%/.workbuddy/connectors-marketplace/.codebuddy-connector/connectors.json`（562,203 bytes）对 11 个名字的子串命中；`installed_plugins.json`（`plugins` 映射 61 条）内四名与 `equity-research@my-experts` 的条目与 `installedAt`；`settings.json` 的 `enabledPlugins` 映射对四名的存在性与取值 | 命中分层清晰：`agent-mail`/`sheetagent`/`weixinpay`/`genie-baas` 在市场清单命中均为 0，而 `wind-finance`/`tdx-connector`/`neodata`/`westock-mcp`/`tushare`/`teacher-assistant` 各 2 次、`ifind-mcp` 3 次 ⇒ 前者根本不属连接器域，「不在连接器管理页」这一条由节点复算为真；`agent-mail`/`genie-baas` 既不在 61 条注册表也不在 `enabledPlugins` 映射内（无用户侧开关，与前轮 `agent-mail` 的三条依据同形）；`sheetagent`/`weixinpay` 以 `@workbuddy-builtin` 在注册表内（`installedAt=2026-09-01T11:39:54.815Z`，早于本 CR 创建 `2026-10-02T12:56:41Z` 与本包 0.11.0 安装 `2026-10-03T16:37:46.455Z`）且 `enabledPlugins` 取值为 `true` ⇒ 这两项在插件域存在开关面，Ray 回执的「开关可关性待确认」在本机现值上收敛为「有开关、当前为开」；另一侧冲突现值：`enabledPlugins` 里四个声明连接器的插件条目取值全为 `false`，与其 `mounted` 观测并存（同 `ENV-07`/`ENV-11` 的不同步族）|例外的事实边界要分清：四项「不属连接器域、不在连接器管理页、非本包引入」三条由节点复算成立，这是 Ray 授权的依据；但「客户端不提供开关」只对 `agent-mail`/`genie-baas` 成立，对 `sheetagent`/`weixinpay` 不成立。本行据此把冲突事实入案而不折中：若 `review-code` 判定可关的内置插件仍须在收敛会话内断开才算「仅保留包声明依赖」，那是对 §4.6/AC-08 口径的改写，须走人类修订与重新审批（dev-plan 已 3/3，再复评撞 `LOOP_EXHAUSTED`），不由本节点自行成立；`enabledPlugins` 与工具面的反向不同步另给复跑加一条前提：复跑前须同时确认 `enabledPlugins` 与 GUI 重连态，不能只看连接器状态文件 |
 
 ## 重装后复现
 
@@ -95,6 +97,18 @@
    (c) 两处偏差不消除、如实写入 `REP-03` 行：参数 `ts_code=600519.SH` ≠ `NZ-01` 的 `603599.SH`（拒绝原文逐字一致 ⇒
    拒绝发生在接口权限层）；证据形态是平台评论的原文转录（评论 ID 与 UTC 时刻在案、执行容器由 `ENV-10` 实测识别），
    无投递件文件级 SHA-256，层级低于 round4 各件，按第 5(b) 类处理并额外登记转录件哈希（「本轮采集回执转录」机器块）。
+
+10. **`RIN-06` 的口径例外来源是人类授权，不是节点自证（本轮新增，交 `review-code` 复核）**：本节点 ③ 曾写明「台账那条书面确认例外路径只覆盖 `agent-mail`」，
+并写明「若内置捆绑三项仍在场，把它们写成例外属于修订 plan/AC 口径，决定权在 Ray」。Ray 本轮以原文书面给出该决定，逐字口径为：
+「授权按『声明依赖保留 4/4 满足 + 客户端内置捆绑基线 4 项登记例外』判定 `RIN-06` 通过，视为口径例外而非 AC 修订」（同一回执内亦逐字写明「我不代为判定 AC 口径」，
+即授权给的是口径标签与范围，判定仍归节点）。因此本轮 `RIN-06` 的 `通过` 由三部分支撑、缺一不可，且各自地位不同：
+(a) 判据主体「四声明项挂载并实际调用」＝Ray 客户端侧观测（原文转录＋正文哈希 `d7076126…`），节点无自证通道（`ENV-09`）；
+(b) 容器与同帧态＝节点同机复算（`ENV-12`）；(c) 残余项归属＝节点同机复算（`ENV-13`），例外范围本身＝人类授权（本条）。
+本条**不把授权写成节点判定**，也不把授权扩到授权依据之外：授权的事实依据是「不在连接器管理页＋非本包依赖＋非本包安装引入」，三项复算为真；
+授权隐含的「内置不可断」只对本机现值中的 `agent-mail`/`genie-baas` 成立，`sheetagent`/`weixinpay` 在 `settings.json#enabledPlugins` 有开关且当前为 `true`。
+该相冲事实入案不消除，其后果由 `review-code` 裁定：若评审认为可关的内置项仍须断开才满足 §4.6 的「仅保留」，则本轮 `RIN-06=通过` 应回到 `阻塞`，
+且那属于 §4.6/AC-08 口径改写，须走人类修订与重新审批（dev-plan 3/3 ⇒ 复评即 `LOOP_EXHAUSTED`），不由本节点或评审面板自行成立。
+边界不变：本轮未改 `plan.md`、`prd.md`、`sdd.md` 与任何 `TASK-*.md`，未改 `cmd-04` 的断言，未把「仅保留」的字面缩小为别的判据。
 
 ## 导出与安装态实测
 
@@ -227,6 +241,87 @@
   "与NZ-01的差异": "ts_code 不同（NZ-01 为 603599.SH），拒绝原文逐字一致",
   "agent_mail书面确认转录": "已实测确认为内置不可断项，无用户侧开关；三条依据＝不在市场清单 connectors-marketplace/.codebuddy-connector/connectors.json（456KB 全文检索无命中）、不在 installed_plugins.json 的 61 个已装插件内且不在用户级 mcp.json 且无独立插件目录、活体调用 agent-mail.GetMe 返回 status=not_bound",
   "确认登记地位": "按 RIN-06 原文规定「本节点按确认登记而不代为判定」入账，不写成节点自己的判定"
+}
+```
+
+第三次派发（`RIN-06` 落定）的采集与授权同出自一条回执原文，正文不含凭据值；授权逐字转录如下，登记为**人类授权**而非节点判定（`登记口径` 第 10 条）：
+
+```json
+{
+  "说明": "RIN-06 的采集原文与授权原文锚点",
+  "source": "Issue AIFI-43 comment 01a105f4-8052-7365-81c0-b21712be3f3a",
+  "created_at_utc": "2026-10-04T08:07:52Z",
+  "content_sha256": "d707612651c31c2f7baa7682100da59919016e4907caf23c1177998764c92c8a",
+  "content_bytes": 2691,
+  "content_chars": 1427,
+  "采集会话自述启动": "2026-10-04T15:50:42+08:00（晚于 14:35:01 重管写入 1h15m41s；容器由 ENV-12 复算为 sessions/27560.json，sessionId 头 08606135）",
+  "四声明项挂载原文": "4/4 mounted，4/4 附真实调用回执（零成本只读接口）：wind-finance get_stock_quote / tdx-connector tdx_quotes / neodata quote_and_kline / westock-mcp portfolio_paper_profit，四条均返回真实数据，非仅 schema 在位",
+  "同帧状态原文": "mtime 15:49:08.052344800 / .055343400，enabled=[]，userDisabled 六项 true；15:58 复核 mtime 漂至 15:58:05 而 enabled 与 userDisabled 内容逐字未变",
+  "未声明项原文": "tushare、ifind-mcp、teacher-assistant 本次 tool-not-mounted；仍在场 4 项＝agent-mail（无用户侧开关，三条依据在案）、sheetagent 与 weixinpay（插件域在册，回执原文记「开关可关性待确认」）、genie-baas（无用户侧开关）；四项均不出现在连接器管理页、不属本包依赖、亦不因本包安装而引入",
+  "ifind_mcp收敛原文": "15:39 时点其 get_security_indicators schema 尚在位，15:58 后 ToolSearch 查无（纠正该员前轮前后表述不一致）",
+  "授权原文逐字": "授权按「声明依赖保留 4/4 满足 + 客户端内置捆绑基线 4 项登记例外」判定 RIN-06 通过，视为口径例外而非 AC 修订",
+  "授权同句的自我限制逐字": "我不代为判定 AC 口径",
+  "登记地位": "口径与例外范围＝人类授权；挂载观测＝客户端侧原文（节点无自证通道 ENV-09）；容器、同帧态与内置项归属＝节点复算（ENV-12/ENV-13）。三者地位不同，不折中，不写成节点自证"
+}
+```
+
+## 本轮采集会话与内置项复算
+
+G4 节点第三次派发（`2026-10-04T16:2x+08:00`）在同一台目标机只读复算的现值，全部可重算；不含任何本机私有绝对路径。凭据内容一律未读取。
+
+```json
+{
+  "说明": "ENV-12/ENV-13 的机器来源；复算时刻 2026-10-04T16:22:58+08:00",
+  "重管写入时刻": "2026-10-04T14:35:01+08:00（connector 状态/mcp-tool-list 一侧的 mtime 锚点，前轮 ENV-09/ENV-10 登记值）",
+  "重管后客户端会话件": {
+    "path_tail": "%USERPROFILE%/.workbuddy/sessions/27560.json",
+    "sessionId_head": "08606135",
+    "pid": 27560,
+    "kind": "interactive",
+    "startedAt": "2026-10-04T15:50:42+08:00",
+    "lastHeartbeat": "2026-10-04T15:56:42+08:00",
+    "cwd_dir_name": "WorkBuddy/2026-10-04-15-50-38",
+    "hostname": "DESKTOP-OT18TRG",
+    "会话件version字段": "2.147.0（会话运行时版本，非客户端构建号，故不与 RunWindow 的 客户端版本=37.10.3-24 冲突）",
+    "同刻续投心跳的既有会话": {"path_tail": "sessions/27780.json", "sessionId_head": "1d95c0ef", "startedAt": "2026-10-04T15:50:43+08:00", "cwd_dir_name": "WorkBuddy/2026-10-04-12-21-28"}
+  },
+  "连接器状态帧": {
+    "path_tail": "%USERPROFILE%/.workbuddy/connectors/{accountIdentityKey}/connector-states.json",
+    "file_mtime": "2026-10-04T15:58:05+08:00",
+    "v3_file_mtime": "2026-10-04T15:58:05+08:00",
+    "version": 4,
+    "enabled": [],
+    "userDisabled_true": ["teacher-assistant", "tdx-connector", "westock-mcp", "tushare", "neodata", "wind-finance"],
+    "connectors_enabled_false": ["teacher-assistant", "tdx-connector", "westock-mcp", "tushare", "neodata", "wind-finance"],
+    "bound_true_all": true,
+    "与采集帧差异": "无（仅 mtime 由 15:49:08 漂至 15:58:05，enabled 与 userDisabled 内容逐字未变；节点复算时刻仍未再变）",
+    "credentials_and_header_overrides_read": false
+  },
+  "内置未声明项复算": {
+    "connector_marketplace_list_path_tail": "%USERPROFILE%/.workbuddy/connectors-marketplace/.codebuddy-connector/connectors.json",
+    "list_bytes": 562203,
+    "hits_zero": ["agent-mail", "sheetagent", "weixinpay", "genie-baas"],
+    "hits_declared_and_others": {"wind-finance": 2, "tdx-connector": 2, "neodata": 2, "westock-mcp": 2, "tushare": 2, "teacher-assistant": 2, "ifind-mcp": 3},
+    "installed_plugins_count": 61,
+    "absent_from_installed_plugins": ["agent-mail", "genie-baas"],
+    "present_in_installed_plugins": {"sheetagent@workbuddy-builtin": {"version": "5.6.2-wb.39298511.g37a65c0b.he233403f909a", "installedAt": "2026-09-01T11:39:54.815Z"}, "weixinpay@workbuddy-builtin": {"version": "1.6.110", "installedAt": "2026-09-01T11:39:54.815Z"}},
+    "settings_enabledPlugins": {"agent-mail": "absent", "genie-baas": "absent", "sheetagent@workbuddy-builtin": true, "weixinpay@workbuddy-builtin": true, "wind-finance@workbuddy-connector-plugins-official": false, "tdx-connector@workbuddy-connector-plugins-official": false, "neodata@workbuddy-connector-plugins-official": false, "westock-mcp@workbuddy-connector-plugins-official": false},
+    "equity_research_in_enabledPlugins": "absent（专家包不属该映射，注册面取 installed_plugins.json 单条目）",
+    "结论": "四项均非连接器域、非本包依赖、非本包安装引入（sheetagent/weixinpay 的 installedAt 早于本 CR 创建 2026-10-02T12:56:41Z）；其中 agent-mail/genie-baas 无任何用户侧开关，sheetagent/weixinpay 在插件域有开关且当前为开 ⇒ 例外授权的事实依据成立、其隐含前提仅半数成立"
+  },
+  "schema缓存旁证": {"path_tail": "%USERPROFILE%/.workbuddy/mcp-tool-list.json", "file_mtime": "2026-10-04T14:35:12+08:00", "用法": "仅作重管写入时刻的旁证，不作会话面判据（ENV-09）"}
+}
+```
+
+## 本轮 cmd 结果
+
+```json
+{
+  "说明": "cwd=仓根，按 plan.md 证据命令表原样执行；台账改毕后复跑，结果同",
+  "cmd-01": {"module": "test_08_source_ledger.py", "exit": 0, "tests": 17},
+  "cmd-02": {"module": "test_09_query_traceability.py", "exit": 0, "tests": 23},
+  "cmd-03": {"module": "test_10_safety_branches.py", "exit": 0, "tests": 36},
+  "cmd-04": {"module": "test_11_reinstall_repro.py", "exit": 0, "tests": 25}
 }
 ```
 
