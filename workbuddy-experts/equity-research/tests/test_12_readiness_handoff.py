@@ -27,10 +27,16 @@ from _evidence import (
     read_coverage,
     require_ids,
     sha256_bytes,
+    sha256_record,
 )
 from _support import README, RepoTest
-from test_08_source_ledger import compute_coverage
-from test_09_query_traceability import PRIVATE_WIN_PATH_RE, SEVEN_DOMAINS, load_verify_records
+from test_08_source_ledger import check_coverage_against, compute_coverage
+from test_09_query_traceability import (
+    PRIVATE_WIN_PATH_RE,
+    RECORD_REF_RE,
+    SEVEN_DOMAINS,
+    load_verify_records,
+)
 from test_10_safety_branches import check_agent, check_sbc01_02_independent
 from test_11_reinstall_repro import (
     REPACKED_RE,
@@ -157,13 +163,73 @@ def expected_reqs(mapping: list[dict]) -> dict[str, list[str]]:
     return out
 
 
-def check_req(reqs: list[dict], mapping: list[dict], known: set[str]) -> dict[str, tuple[int, int, list[str]]]:
+def _req_violations(row: dict, *, qry_by_id: dict, lic_by_id: dict, records: dict,
+                    machine: dict[str, bool]) -> list[str]:
+    """SDD §4.5 的四条件机检（覆盖不来自台账，来自对上游 QRY/LIC/VR/前序 REQ 的现算）。"""
+    violations: list[str] = []
+    refs = REF_RE.findall(row["关联证据行"])
+    qrids = [r for r in refs if r.startswith("QRY-")]
+    licids = [r for r in refs if r.startswith("LIC-")]
+    vrids = [r for r in refs if r.startswith("VR-")]
+    adopted = [qry_by_id[q] for q in qrids if q in qry_by_id and qry_by_id[q]["是否最终采用源"] == "是"]
+    if not adopted:
+        violations.append("本次实测成功行（关联 QRY 缺位或均未采用）")
+    bound_vrids: set[str] = set()
+    for q in adopted:
+        m = RECORD_REF_RE.search(q["证据对象引用"])
+        if m is None:
+            violations.append(f"{q['ID']} 证据对象引用不合法")
+            continue
+        vrid = m.group(1)
+        rec = records.get(vrid)
+        if rec is None:
+            violations.append(f"{q['ID']} 证据对象 {vrid} 缺位")
+            continue
+        if sha256_record(rec) != q["SHA-256"]:
+            violations.append(f"{q['ID']} 证据对象 {vrid} 哈希不匹配")
+            continue
+        bound_vrids.add(vrid)
+    if vrids and not set(vrids) <= bound_vrids:
+        violations.append(f"关联 VR 未绑定 adopted QRY：{sorted(set(vrids) - bound_vrids)}")
+    entries = {q["源"].split("（")[0].split("／")[0].strip() for q in adopted}
+    ok_lic = any(
+        lic_by_id.get(l, {}).get("状态") == "已确认" and lic_by_id[l].get("入口") in entries
+        for l in licids
+    )
+    if not ok_lic:
+        violations.append("对应用途 LIC=已确认（关联 LIC 与 adopted QRY 入口不匹配或未确认）")
+    for dep in re.findall(r"REQ-\d{2}", row["前序依赖"]):
+        if not machine.get(dep, False):
+            violations.append(f"前序依赖 {dep} 未成立")
+    if adopted:
+        req_domains = {d.strip() for d in re.split(r"[；;]", row["数据域"])
+                       if d.strip() and not d.strip().startswith("不适用")}
+        qry_domains = {q["数据域"] for q in adopted}
+        if req_domains and not (req_domains & qry_domains):
+            violations.append(f"数据域不满足（REQ={sorted(req_domains)} ∩ QRY={sorted(qry_domains)} = ∅）")
+        req_period = row["报告期间"].strip()
+        if not req_period.startswith("不适用"):
+            req_years = set(re.findall(r"\b\d{4}\b", req_period))
+            qry_text = " ".join(
+                [q["请求期间"] for q in adopted]
+                + [records[b]["期间覆盖"] for b in bound_vrids if b in records]
+            )
+            qry_years = set(re.findall(r"\b\d{4}\b", qry_text))
+            if req_years and not (req_years & qry_years):
+                violations.append(f"期间满足（REQ {sorted(req_years)} ∩ QRY {sorted(qry_years)} = ∅）")
+    return violations
+
+
+def check_req(reqs: list[dict], mapping: list[dict], known: set[str], *,
+              qry: list[dict], lic: list[dict], records: dict) -> dict[str, tuple[int, int, list[str]]]:
     want = expected_reqs(mapping)
     flat = [i for batch in want.values() for i in batch]
     got = [r["ID"] for r in reqs]
     if got != flat:
         raise AssertionError(f"必需查询集条目或顺序偏离 CR1 required-data 展开：现 {got} != 应 {flat}")
-    per_task: dict[str, tuple[int, int, list[str]]] = {}
+    qry_by_id = {r["ID"]: r for r in qry}
+    lic_by_id = {r["ID"]: r for r in lic}
+    machine: dict[str, bool] = {}
     for row, req_id in zip(reqs, flat):
         for col in REQ_COLUMNS:
             if not row[col].strip():
@@ -174,23 +240,32 @@ def check_req(reqs: list[dict], mapping: list[dict], known: set[str]) -> dict[st
             raise AssertionError(f"REQ 行 {req_id} 覆盖判定 {row['覆盖判定']!r} 不在 {REQ_VERDICTS}")
         if row["关联证据行"].strip() != "无":
             check_ref_cell(row["关联证据行"], known, where=f"REQ {req_id} 关联证据行")
-        if row["覆盖判定"] == "未覆盖" and "缺" not in row["判定依据"]:
+        # §4.5 四条件机检——覆盖与否由现算而非由本行「覆盖判定」标签决定
+        violations = _req_violations(row, qry_by_id=qry_by_id, lic_by_id=lic_by_id,
+                                     records=records, machine=machine)
+        machine[req_id] = not violations
+        label = row["覆盖判定"] == "覆盖"
+        if label != machine[req_id]:
+            raise AssertionError(
+                f"REQ 行 {req_id} 覆盖判定 {row['覆盖判定']} 与 §4.5 四条件机检不一致（violations={violations}）")
+        if not label and "缺" not in row["判定依据"]:
             raise AssertionError(f"REQ 行 {req_id} 记未覆盖但未写明 §4.5 四条件中缺哪一条")
+    per_task: dict[str, tuple[int, int, list[str]]] = {}
     for mr, batch in want.items():
-        rows = [r for r in reqs if r["来源映射行"] == mr]
-        covered = sum(1 for r in rows if r["覆盖判定"] == "覆盖")
-        gaps = [r["ID"] for r in rows if r["覆盖判定"] == "未覆盖"]
+        covered = sum(1 for rid in batch if machine[rid])
+        gaps = [rid for rid in batch if not machine[rid]]
         per_task[mr] = (covered, len(batch), gaps)
     return per_task
 
 
 def check_tsk(tsk: list[dict], reqs: list[dict], dom: list[dict], mapping: list[dict],
-              known: set[str]) -> None:
+              known: set[str], *, qry: list[dict], lic: list[dict],
+              records: dict) -> None:
     require_ids(tsk, "TSK", minimum=9)
     if len(tsk) != 9:
         raise AssertionError(f"任务就绪必须恰九行（MR-01..09），现 {len(tsk)} 行")
     want = expected_reqs(mapping)
-    per_task = check_req(reqs, mapping, known)
+    per_task = check_req(reqs, mapping, known, qry=qry, lic=lic, records=records)
     available_domains = {r["ID"] for r in dom if r["状态"] == "可用"}
     for i, row in enumerate(tsk):
         mr = f"MR-{i + 1:02d}"
@@ -250,6 +325,7 @@ class ReadinessHandoff(RepoTest):
         self.dcl = load_table("declarations.md", "声明修正")
         self.intake = load_table("index.md", "CR1 输入核对")
         self.mapping = self.mapping_rows()
+        self.records = load_verify_records()
         self.known = known_ids() | {r["ID"] for r in self.dom} | {r["ID"] for r in self.tsk} | \
             {r["ID"] for r in self.req}
 
@@ -270,12 +346,14 @@ class ReadinessHandoff(RepoTest):
 
     # --- AC-09: REQ set expanded from CR1, not self-declared ---
     def test_req_set_equals_cr1_expansion(self) -> None:
-        check_req(self.req, self.mapping, self.known)
+        check_req(self.req, self.mapping, self.known,
+                  qry=self.qry, lic=self.lic, records=self.records)
         self.assertEqual(len(self.req), 31, "九项映射 required-data 展开应恰 31 条 REQ")
 
     # --- AC-09: task readiness rows ---
     def test_task_rows_cover_counts_and_states(self) -> None:
-        check_tsk(self.tsk, self.req, self.dom, self.mapping, self.known)
+        check_tsk(self.tsk, self.req, self.dom, self.mapping, self.known,
+                  qry=self.qry, lic=self.lic, records=self.records)
 
     def test_no_task_signed_ready(self) -> None:
         # FR-09：许可或必需查询阻塞域可明示交付限制，但不得签成完整任务能力
@@ -286,11 +364,18 @@ class ReadinessHandoff(RepoTest):
 
     def test_domain_available_does_not_propagate_to_task(self) -> None:
         # §4.5「域级传播不成立」：每条 REQ 覆盖齐备才可就绪，域级成功不能替代
+        # 映射键比较按 MR 编号取前缀（B-CODE-02：`row["CR1 映射行"]` 含 ` `/earnings` 尾缀）
         for row in self.tsk:
+            mr_key = row["CR1 映射行"].split()[0]
             gaps = [r["ID"] for r in self.req
-                    if r["来源映射行"] == row["CR1 映射行"] and r["覆盖判定"] == "未覆盖"]
+                    if r["来源映射行"] == mr_key and r["覆盖判定"] == "未覆盖"]
             if gaps:
                 self.assertNotEqual(row["状态"], "就绪", f"{row['ID']} 有未覆盖 {gaps} 却签就绪")
+            else:
+                # 无未覆盖时若仍非就绪，须在原因列写明其他限制依据（§4.5/不变量 3）
+                if row["状态"] != "就绪":
+                    self.assertTrue(row["尚不能支持完整版的原因"].strip(),
+                                    f"{row['ID']} REQ 全覆盖却未就绪且未写明其它限制")
 
     # --- AC-09: coverage summary == computed == coverage.json ---
     def test_coverage_summary_matches_computed(self) -> None:
@@ -300,17 +385,14 @@ class ReadinessHandoff(RepoTest):
             self.lic,
             self.intake,
             load_table("index.md", "交付物入口"),
+            dom=self.dom, tsk=self.tsk, reqs=self.req,
         )
         self.assertEqual(computed["域可用计数"], sum(1 for r in self.dom if r["状态"] == "可用"),
                          "域可用计数 != 域状态表的 可用 行数")
         self.assertEqual(computed["安全场景实测数"], 9, "九场景登记行数漂移")
+        self.assertEqual(computed["九任务 REQ 分母"], 31, "REQ 分母 != CR1 required-data 展开 31")
         check_sbc01_02_independent(self.sbc)
-        for row in load_table("index.md", "覆盖率摘要"):
-            self.assertEqual(int(row["计数"]), computed[row["指标"]],
-                             f"{row['指标']} 摘要 {row['计数']} != 现算 {computed[row['指标']]}")
-        cov = read_coverage()
-        for key, value in computed.items():
-            self.assertEqual(cov.get(key), value, f"coverage.json {key} {cov.get(key)} != 现算 {value}")
+        check_coverage_against(computed, load_table("index.md", "覆盖率摘要"), read_coverage())
 
     # --- AC-10: DCL closure re-checked, boundaries untouched ---
     def test_dcl_rows_closed_by_recomputed_zero_diff(self) -> None:
@@ -384,7 +466,8 @@ class ReadinessHandoff(RepoTest):
         row["状态"] = "就绪"
         row["未覆盖 REQ-NN"] = "无"
         with self.assertRaises(AssertionError):
-            check_tsk(bad, self.req, self.dom, self.mapping, self.known)
+            check_tsk(bad, self.req, self.dom, self.mapping, self.known,
+                      qry=self.qry, lic=self.lic, records=self.records)
 
     def test_sbc01_02_merged_row_rejected(self) -> None:
         merged = [r for r in self.sbc if r["ID"] != "SBC-02"]
@@ -412,7 +495,65 @@ class ReadinessHandoff(RepoTest):
     def test_req_dropped_from_set_rejected(self) -> None:
         bad = [r for r in self.req if r["ID"] != "REQ-07"]
         with self.assertRaises(AssertionError):
-            check_req(bad, self.mapping, self.known)
+            check_req(bad, self.mapping, self.known,
+                      qry=self.qry, lic=self.lic, records=self.records)
+
+    # --- B-CODE-02 反例：REQ 覆盖由四条件机检而非台账标签 ---
+    def _check_req_wrapper(self, reqs):
+        check_req(reqs, self.mapping, self.known,
+                  qry=self.qry, lic=self.lic, records=self.records)
+
+    def test_wrong_entry_licence_cannot_sign_coverage(self) -> None:
+        """REQ-01 的 adopted QRY 源为 wind-finance；引用 tdx-connector 的 LIC-04 不再满足条件 1。"""
+        bad = [dict(r) for r in self.req]
+        idx = next(i for i, r in enumerate(bad) if r["ID"] == "REQ-01")
+        bad[idx]["关联证据行"] = bad[idx]["关联证据行"].replace("LIC-01", "LIC-04")
+        with self.assertRaises(AssertionError):
+            self._check_req_wrapper(bad)
+
+    def test_existing_but_failed_qry_cannot_sign_coverage(self) -> None:
+        """把 REQ-01 的 QRY-01 换成 QRY-04（是否最终采用源=否），条件 2 破坏。"""
+        bad = [dict(r) for r in self.req]
+        idx = next(i for i, r in enumerate(bad) if r["ID"] == "REQ-01")
+        bad[idx]["关联证据行"] = bad[idx]["关联证据行"].replace("QRY-01", "QRY-04")
+        bad[idx]["关联证据行"] = bad[idx]["关联证据行"].replace("VR-01", "VR-04")
+        with self.assertRaises(AssertionError):
+            self._check_req_wrapper(bad)
+
+    def test_wrong_domain_cannot_sign_coverage(self) -> None:
+        """REQ-01 数据域改成「券商一致预期」但 adopted QRY-01 属机构财务域 ⇒ 条件 4 破坏。"""
+        bad = [dict(r) for r in self.req]
+        idx = next(i for i, r in enumerate(bad) if r["ID"] == "REQ-01")
+        bad[idx]["数据域"] = "券商一致预期"
+        with self.assertRaises(AssertionError):
+            self._check_req_wrapper(bad)
+
+    def test_wrong_period_cannot_sign_coverage(self) -> None:
+        """REQ-01 期间改成「2030 年报」，adopted QRY-01 无任何 2030 token ⇒ 条件 4 破坏。"""
+        bad = [dict(r) for r in self.req]
+        idx = next(i for i, r in enumerate(bad) if r["ID"] == "REQ-01")
+        bad[idx]["报告期间"] = "2030 年报期（2030-12-31）"
+        with self.assertRaises(AssertionError):
+            self._check_req_wrapper(bad)
+
+    def test_wrong_prerequisite_cannot_sign_coverage(self) -> None:
+        """REQ-16 前序改成未覆盖的 REQ-15 ⇒ 条件 4 破坏。"""
+        bad = [dict(r) for r in self.req]
+        idx = next(i for i, r in enumerate(bad) if r["ID"] == "REQ-16")
+        bad[idx]["前序依赖"] = "REQ-15"
+        with self.assertRaises(AssertionError):
+            self._check_req_wrapper(bad)
+
+    def test_legal_coverage_positive_example_passes(self) -> None:
+        """REQ-01/03/13/14/16/24/30 现值均满足四条件（正向确认，防恒假断言）。"""
+        legal = {"REQ-01", "REQ-03", "REQ-13", "REQ-14", "REQ-16", "REQ-24", "REQ-30"}
+        for rid in legal:
+            row = next(r for r in self.req if r["ID"] == rid)
+            v = _req_violations(row, qry_by_id={q["ID"]: q for q in self.qry},
+                                lic_by_id={l["ID"]: l for l in self.lic},
+                                records=self.records,
+                                machine={r["ID"]: (r["覆盖判定"] == "覆盖") for r in self.req})
+            self.assertEqual(v, [], f"{rid} 应满足四条件却检出 violations={v}")
 
 
 if __name__ == "__main__":

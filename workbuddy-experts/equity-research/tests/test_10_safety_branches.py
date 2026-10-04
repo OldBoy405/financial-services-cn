@@ -32,7 +32,7 @@ from _evidence import (
     sha256_record,
 )
 from _support import NINE_PAIRS, RepoTest
-from test_08_source_ledger import compute_coverage
+from test_08_source_ledger import check_coverage_against, compute_coverage, load_readiness
 from test_09_query_traceability import (
     PRIVATE_WIN_PATH_RE,
     VERIFY_ONLY_FIELDS,
@@ -450,20 +450,17 @@ class SafetyBranches(RepoTest):
         self.assertIsNone(PRIVATE_WIN_PATH_RE.search(self.text), "safety-branches.md 含私有绝对路径")
 
     def test_coverage_counts_match(self) -> None:
+        dom, tsk, reqs = load_readiness()
         computed = compute_coverage(
             load_table("data-sources.md", "安装与连接台账"),
             load_table("data-sources.md", "连接器标识分层"),
             self.lic,
             load_table("index.md", "CR1 输入核对"),
             load_table("index.md", "交付物入口"),
+            dom=dom, tsk=tsk, reqs=reqs,
         )
         self.assertEqual(computed["安全场景实测数"], len(self.sbc), "安全场景实测数 != SBC 登记行数")
-        for row in load_table("index.md", "覆盖率摘要"):
-            self.assertEqual(int(row["计数"]), computed[row["指标"]],
-                             f"{row['指标']} 摘要 {row['计数']} != 现算 {computed[row['指标']]}")
-        cov = read_coverage()
-        for key, value in computed.items():
-            self.assertEqual(cov.get(key), value, f"coverage.json {key} {cov.get(key)} != 现算 {value}")
+        check_coverage_against(computed, load_table("index.md", "覆盖率摘要"), read_coverage())
 
     # --- counterexamples (TASK-03 §4) ---
     def test_dropped_sbc02_row_rejected(self) -> None:

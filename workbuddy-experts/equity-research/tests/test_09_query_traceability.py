@@ -29,9 +29,31 @@ from _evidence import (
     sha256_record,
 )
 from _support import ROOT, RepoTest
-from test_08_source_ledger import compute_coverage
+from test_08_source_ledger import check_coverage_against, compute_coverage, load_readiness
 
 EVIDENCE_MODES = {"raw-versioned", "raw-local-only", "extract-only", "verify-only"}
+# SDD §2.3: 每种留证方式要求 (源, 用途) 的 LIC=已确认 集合。逐动作 fail-closed 由这张表机检，
+# 「许可未确认却切换到更宽的留证方式」在 check_qry 内即拒。
+MODE_REQUIRED_USES = {
+    "verify-only": ("本机自用",),
+    "extract-only": ("本机自用", "研究引用展示"),
+    "raw-local-only": ("本机自用", "文件中使用"),
+    "raw-versioned": ("本机自用", "研究引用展示", "文件中使用"),
+}
+# B-CODE-01 verify-only 版本化文件禁止出现的响应字段值形态：
+# (a) 财务/计数类数据值（`<数字>` 紧跟单位/百分号）
+# (b) `<标识符>=<数字>` 形态的响应字段值（如 totalStocks=825、cost=156）
+FORBIDDEN_FIELD_VALUE_RES = (
+    re.compile(r"\d+(?:\.\d+)?\s*(?:%|亿元|万元|元)(?![A-Za-z])"),
+    re.compile(r"\b(?:totalStocks|net_profit|netProfit|profit_forecast\w*|target_avg_price|institution_rating|ROE|roe)\s*[=:：]\s*-?\d"),
+)
+VERIFIED_USES = {"本机自用", "研究引用展示", "文件中使用"}
+REQ_DATE_PAIR_RE = re.compile(
+    r"(?:start_date|start|from_date|begin)\s*[=:：]\s*(\d{4})-?(\d{2})-?(\d{2})[；;]?\s*"
+    r"(?:end_date|end|to_date|until)\s*[=:：]\s*(\d{4})-?(\d{2})-?(\d{2})",
+    re.IGNORECASE,
+)
+ISO_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 ADOPTED = {"是", "否"}
 COND_KEYS = ("最近完整披露", "研报覆盖充分", "研报可查", "合法使用权")
 VERIFY_ONLY_FIELDS = ("请求条件", "源与工具", "结果状态", "期间覆盖", "字段清单", "响应标识", "检索时间")
@@ -120,7 +142,8 @@ def check_smp01_verbatim_smp01(rows: list[dict]) -> None:
 
 
 def _licence_for(row: dict, lic: list[dict]) -> dict:
-    """Cross-check the (源, 动作=本机查询/实取 ⇒ 用途=本机自用) LIC row referenced by 复核路径."""
+    """Cross-check the (源, 动作=本机查询/实取 ⇒ 用途=本机自用) LIC row referenced by 复核路径,
+    then per SDD §2.2/§2.3 assert every use required by 留证方式 has a 已确认 LIC for that 入口."""
     refs = LIC_REF_RE.findall(row["复核路径"])
     if not refs:
         raise AssertionError(f"QRY 行 {row['ID']} 复核路径未引用 LIC 记录")
@@ -134,7 +157,37 @@ def _licence_for(row: dict, lic: list[dict]) -> dict:
     matched = [hit for hit in hits if hit["入口"] == entry]
     if not matched:
         raise AssertionError(f"QRY 行 {row['ID']} 的源 {entry!r} 无对应 已确认 的本机自用 LIC 行（引用 {refs}）")
+    # SDD §2.3：留证方式所要求的每一种用途都必须在该入口有 LIC=已确认，否则 fail-closed
+    for use in MODE_REQUIRED_USES[row["留证方式"]]:
+        ok = any(l["入口"] == entry and l["用途"] == use and l["状态"] == "已确认" for l in lic)
+        if not ok:
+            raise AssertionError(
+                f"QRY 行 {row['ID']} 留证方式={row['留证方式']} 要求 ({entry}, {use}) LIC=已确认，"
+                f"实际未获准（SDD §2.2 不变量 2/§2.3 逐动作 fail-closed）")
     return matched[0]
+
+
+def _forbid_field_values(text: str, *, where: str) -> None:
+    for pat in FORBIDDEN_FIELD_VALUE_RES:
+        m = pat.search(text)
+        if m:
+            raise AssertionError(
+                f"{where} 出现 verify-only 不允许的响应字段值形态 {m.group(0)!r}（SDD §2.3 不复制字段值）")
+
+
+def _extract_request_dates(conditions: str) -> tuple[str, str] | None:
+    m = REQ_DATE_PAIR_RE.search(conditions)
+    if not m:
+        return None
+    y1, mo1, d1, y2, mo2, d2 = m.groups()
+    return (f"{y1}-{mo1}-{d1}", f"{y2}-{mo2}-{d2}")
+
+
+def _date_span(text: str) -> tuple[str, str] | None:
+    ds = ISO_DATE_RE.findall(text)
+    if not ds:
+        return None
+    return (min(ds), max(ds))
 
 
 def check_qry(rows: list[dict], smp: list[dict], records: dict[str, dict],
@@ -173,6 +226,12 @@ def check_qry(rows: list[dict], smp: list[dict], records: dict[str, dict],
             if tuple(record) != VERIFY_ONLY_FIELDS:
                 raise AssertionError(
                     f"QRY 行 {row['ID']} verify-only 记录字段 {tuple(record)} != §2.3 七字段（不得含响应正文）")
+            for key in ("结果状态", "字段清单", "期间覆盖"):
+                _forbid_field_values(record[key], where=f"QRY 行 {row['ID']} verify-only 记录 {key}")
+            # 记录自身检索时间必须落 RunWindow（对象时间出窗而行时间在窗是 B-CODE-04 反例）
+            check_in_run_window({"t": record["检索时间"]}, run_window, time_field="t")
+        _forbid_field_values(row["口径"], where=f"QRY 行 {row['ID']} 口径")
+        _forbid_field_values(row["返回字段与结果状态"], where=f"QRY 行 {row['ID']} 返回字段与结果状态")
         check_object_hash(row, record=record)
 
         # 6(a) sample identity layer: securities code + exchange must equal a verified SMP row
@@ -196,9 +255,26 @@ def check_qry(rows: list[dict], smp: list[dict], records: dict[str, dict],
             if "（" not in period:
                 raise AssertionError(f"QRY 行 {row['ID']} 请求期间 标 不适用 未注明口径依据")
         else:
+            # 请求期间 必须原样承载 查询条件 中 start/end 参数（§2.2 不变量 6(b)：结果覆盖不得反写请求）
+            req_dates = _extract_request_dates(row["查询条件"])
+            period_span = _date_span(period)
+            if req_dates is not None:
+                if period_span is None or not (period_span[0] <= req_dates[0] and req_dates[1] <= period_span[1]):
+                    raise AssertionError(
+                        f"QRY 行 {row['ID']} 请求期间 {period!r} 未原样承载查询条件参数区间 {req_dates}"
+                        f"（§2.2 不变量 6(b)：返回覆盖不能改写本次请求期间）")
             coverage = record["期间覆盖"]
-            if period not in coverage:
-                raise AssertionError(f"QRY 行 {row['ID']} 请求期间 {period!r} 与证据对象期间覆盖 {coverage!r} 不一致")
+            # 证据对象的期间覆盖必须 ⊆ 请求期间（非交易日截断合法，反写或扩张非法）
+            cov_span = _date_span(coverage)
+            if req_dates is not None:
+                if cov_span is not None and period_span is not None:
+                    if not (period_span[0] <= cov_span[0] and cov_span[1] <= period_span[1]):
+                        raise AssertionError(
+                            f"QRY 行 {row['ID']} 证据对象期间覆盖 {cov_span} 越出请求期间 {period_span}"
+                            f"（§2.2 不变量 6(b)：覆盖 ⊆ 请求）")
+            elif period not in coverage:
+                raise AssertionError(
+                    f"QRY 行 {row['ID']} 请求期间 {period!r} 与证据对象期间覆盖 {coverage!r} 不一致")
             if sample is not None and "同一原件复取" in row["查询条件"]:
                 if period != sample["报告期间"]:
                     raise AssertionError(
@@ -226,6 +302,7 @@ def check_src(rows: list[dict], kj: list[dict], qry: list[dict]) -> None:
         for col in ("指标", "候选源与逐项差异", "最终采用源", "裁决依据"):
             if not row[col].strip():
                 raise AssertionError(f"SRC 行 {row['ID']} 字段 {col} 为空")
+            _forbid_field_values(row[col], where=f"SRC 行 {row['ID']} {col}")
         adopted = row["最终采用源"].strip()
         if adopted.startswith("无"):
             continue  # explicit non-adoption with a recorded gap
@@ -249,6 +326,7 @@ def check_kj(rows: list[dict]) -> None:
         for col in ("源", "审查项", "结论"):
             if not row[col].strip():
                 raise AssertionError(f"口径审查 行 {row['ID']} 字段 {col} 为空")
+            _forbid_field_values(row[col], where=f"口径审查 行 {row['ID']} {col}")
 
 
 def check_no_hk_sample_rows(smp: list[dict], qry: list[dict]) -> None:
@@ -385,6 +463,74 @@ class QueryTraceability(RepoTest):
         with self.assertRaises(AssertionError):
             check_qry(self.qry, self.smp, self.records, lic, self.run_window)
 
+    # --- B-CODE-01 反例：verify-only 复制响应字段值 / 许可未确认却切换留证方式 ---
+    def test_verify_only_field_value_leak_rejected(self) -> None:
+        """SDD §2.3 verify-only 不复制字段值：totalStocks 具体数值塞回 VR-07 必须失败。"""
+        records = {k: dict(v) for k, v in self.records.items()}
+        records["VR-07"]["结果状态"] = "成功；totalStocks=825（表达式 ...）"
+        with self.assertRaises(AssertionError):
+            check_qry(self.qry, self.smp, records, self.lic, self.run_window)
+
+    def test_verify_only_financial_unit_value_rejected(self) -> None:
+        """财务数值+单位（如 6.5691 亿元）在 QRY 行内即越界。"""
+        bad = [dict(r) for r in self.qry]
+        bad[0]["口径"] = bad[0]["口径"] + "；净利润=6.5691 亿元"
+        with self.assertRaises(AssertionError):
+            check_qry(bad, self.smp, self.records, self.lic, self.run_window)
+
+    def test_src_row_field_value_leak_rejected(self) -> None:
+        bad = [dict(r) for r in self.src]
+        bad[0]["候选源与逐项差异"] = "QRY-01 wind-finance（6.5691 亿元）／QRY-03 neodata（656907533 元）"
+        with self.assertRaises(AssertionError):
+            check_src(bad, self.kj, self.qry)
+
+    def test_kj_row_field_value_leak_rejected(self) -> None:
+        bad = [dict(r) for r in self.kj]
+        bad[1]["结论"] = "656907533 元 与 6.5691 亿元 一致"
+        with self.assertRaises(AssertionError):
+            check_kj(bad)
+
+    def test_extract_mode_switch_without_citation_licence_rejected(self) -> None:
+        """研究引用展示=待确认时把 verify-only 切 extract-only 必须失败（§2.2 不变量 2）。"""
+        bad = [dict(r) for r in self.qry]
+        bad[0]["留证方式"] = "extract-only"
+        with self.assertRaises(AssertionError):
+            check_qry(bad, self.smp, self.records, self.lic, self.run_window)
+
+    def test_raw_versioned_mode_switch_without_file_licence_rejected(self) -> None:
+        bad = [dict(r) for r in self.qry]
+        bad[0]["留证方式"] = "raw-versioned"
+        with self.assertRaises(AssertionError):
+            check_qry(bad, self.smp, self.records, self.lic, self.run_window)
+
+    # --- B-CODE-04 反例：请求期间被返回覆盖反写 / 对象时间出窗 / 换记录 ---
+    def test_request_period_rewritten_by_result_coverage_rejected(self) -> None:
+        """QRY-06 请求 end=2026-10-03，把 请求期间 改成截断到 2026-09-30 即反写。"""
+        bad = [dict(r) for r in self.qry]
+        idx = next(i for i, r in enumerate(bad) if r["ID"] == "QRY-06")
+        bad[idx]["请求期间"] = "2026-09-16～2026-09-30"
+        with self.assertRaises(AssertionError):
+            check_qry(bad, self.smp, self.records, self.lic, self.run_window)
+
+    def test_object_time_outside_row_window_rejected(self) -> None:
+        """证据对象检索时间出 RunWindow、而行 数据/获取时间戳 仍在窗：对象时间落窗断言必须拒。"""
+        records = {k: dict(v) for k, v in self.records.items()}
+        records["VR-01"]["检索时间"] = "2026-10-05T09:00:00+08:00"
+        with self.assertRaises(AssertionError):
+            check_qry(self.qry, self.smp, records, self.lic, self.run_window)
+
+    def test_qry_bound_to_wrong_record_rejected(self) -> None:
+        """换记录（QRY-06 指向 VR-07）：SHA-256 与 canonical hash 不等必须拒。"""
+        bad = [dict(r) for r in self.qry]
+        idx = next(i for i, r in enumerate(bad) if r["ID"] == "QRY-06")
+        bad[idx]["证据对象引用"] = "workbuddy-experts/equity-research/evidence/queries.md#核验记录对象/VR-07"
+        with self.assertRaises(AssertionError):
+            check_qry(bad, self.smp, self.records, self.lic, self.run_window)
+
+    def test_non_trading_truncation_still_passes(self) -> None:
+        """合法非交易日截断（请求 09-16～10-03、覆盖 09-16～09-30）仍必须通过（positive case）。"""
+        check_qry(self.qry, self.smp, self.records, self.lic, self.run_window)
+
     # --- header drift counterexamples on a temporary copy of the table file ---
     def _load_from_mutated_file(self, mutate) -> None:
         import shutil
@@ -427,15 +573,11 @@ class QueryTraceability(RepoTest):
         intake = load_table("index.md", "CR1 输入核对")
         deliverables = load_table("index.md", "交付物入口")
         summary = load_table("index.md", "覆盖率摘要")
-        computed = compute_coverage(self._lat(), self._con(), self.lic, intake, deliverables)
+        dom, tsk, reqs = load_readiness()
+        computed = compute_coverage(self._lat(), self._con(), self.lic, intake, deliverables,
+                                     dom=dom, tsk=tsk, reqs=reqs)
         self.assertEqual(computed["七域实取成功数"], 7, "七域采用行数与实取成功数不一致")
-        for row in summary:
-            self.assertIn(row["指标"], computed)
-            self.assertEqual(int(row["计数"]), computed[row["指标"]],
-                             f"{row['指标']} 摘要 {row['计数']} != 现算 {computed[row['指标']]}")
-        cov = read_coverage()
-        for key, value in computed.items():
-            self.assertEqual(cov.get(key), value, f"coverage.json {key} {cov.get(key)} != 现算 {value}")
+        check_coverage_against(computed, summary, read_coverage())
 
     @staticmethod
     def _lat():

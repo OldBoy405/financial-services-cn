@@ -128,13 +128,38 @@ def check_registry(registry: dict) -> None:
             raise AssertionError(f"TABLE_COLUMNS[{key}] 列名/列序偏离 §6: {registry[key]} != {cols}")
 
 
-def compute_coverage(lat, con, lic, intake, deliverables) -> dict:
+def compute_coverage(lat, con, lic, intake, deliverables, *, dom=None, tsk=None, reqs=None) -> dict:
     def _count(path, predicate):
         if not path.is_file():
             return 0
         return sum(1 for ln in path.read_text(encoding="utf-8").splitlines() if predicate(ln))
 
     adopted = _count(EVIDENCE / "queries.md", lambda ln: ln.rstrip().endswith("| 是 |"))
+    lic_by_id = {r["ID"]: r for r in lic}
+    qry_ids = set()
+    if (EVIDENCE / "queries.md").is_file():
+        for ln in (EVIDENCE / "queries.md").read_text(encoding="utf-8").splitlines():
+            if ln.startswith("| QRY-"):
+                cells = [c.strip() for c in ln.strip().strip("|").split("|")]
+                if len(cells) >= 18 and cells[-1] == "是":
+                    qry_ids.add(cells[0])
+    dom = dom if dom is not None else []
+    tsk = tsk if tsk is not None else []
+    reqs = reqs if reqs is not None else []
+    req_total = len(reqs)
+    req_covered = sum(1 for r in reqs if r["覆盖判定"] == "覆盖")
+    # 域=可用 的对应许可加实取证据覆盖数：DOM 状态=可用 且 许可引用有已确认 LIC 且 证据引用指向采用 QRY
+    dom_available_covered = 0
+    for d in dom:
+        if d["状态"] != "可用":
+            continue
+        import re as _re
+        lic_refs = _re.findall(r"LIC-\d{2}", d["许可引用"])
+        qry_refs = _re.findall(r"QRY-\d{2}", d["证据引用"])
+        lic_ok = any(lic_by_id.get(i, {}).get("状态") == "已确认" for i in lic_refs)
+        qry_ok = any(q in qry_ids for q in qry_refs)
+        if lic_ok and qry_ok:
+            dom_available_covered += 1
     return {
         "六入口台账条数": len(lat),
         "连接器标识条数": len(con),
@@ -145,7 +170,42 @@ def compute_coverage(lat, con, lic, intake, deliverables) -> dict:
         "安全场景实测数": _count(EVIDENCE / "safety-branches.md", lambda ln: "| SBC-0" in ln),
         "CR1 输入核对通过数": sum(1 for r in intake if r["核对结果"] == "通过"),
         "交付物入口数": len(deliverables),
+        # SDD §2.1 CoverageReport / TASK-05 §3.4 G5 指标
+        "九任务 REQ 分母": req_total,
+        "九任务 REQ 已覆盖数": req_covered,
+        "九任务 REQ 未覆盖数": req_total - req_covered,
+        "九任务就绪数": sum(1 for t in tsk if t["状态"] == "就绪"),
+        "九任务可降级但质量受限数": sum(1 for t in tsk if t["状态"] == "可降级但质量受限"),
+        "九任务阻塞数": sum(1 for t in tsk if t["状态"] == "阻塞"),
+        "域可用的许可加实取证据覆盖数": dom_available_covered,
     }
+
+
+def load_readiness() -> tuple[list[dict], list[dict], list[dict]]:
+    """Read `domain-readiness.md` (post-TASK-05) so cmd-01/cmd-02 coverage checks see the G5 rows too.
+    Returns ([], [], []) before G5 lands, which keeps compute_coverage's G5 counters at 0."""
+    if not (EVIDENCE / "domain-readiness.md").is_file():
+        return [], [], []
+    from test_12_readiness_handoff import REQ_COLUMNS, local_table
+    dom = load_table("domain-readiness.md", "域状态")
+    tsk = load_table("domain-readiness.md", "任务就绪")
+    reqs = local_table("必需查询集", REQ_COLUMNS)
+    return dom, tsk, reqs
+
+
+def check_coverage_against(computed: dict, summary_rows: list[dict], cov_json: dict) -> None:
+    """Assert summary keys == computed keys, values match, and coverage.json mirrors every computed key."""
+    summary_keys = {r["指标"] for r in summary_rows}
+    if summary_keys != set(computed):
+        miss = sorted(set(computed) - summary_keys)
+        extra = sorted(summary_keys - set(computed))
+        raise AssertionError(f"覆盖率摘要指标集与现算不一致：摘要缺 {miss}，多 {extra}")
+    for row in summary_rows:
+        if int(row["计数"]) != computed[row["指标"]]:
+            raise AssertionError(f"{row['指标']} 摘要 {row['计数']} != 现算 {computed[row['指标']]}")
+    for key, value in computed.items():
+        if cov_json.get(key) != value:
+            raise AssertionError(f"coverage.json {key} {cov_json.get(key)!r} != 现算 {value!r}")
 
 
 class SourceLedger(RepoTest):
@@ -227,16 +287,30 @@ class SourceLedger(RepoTest):
         with self.assertRaises(AssertionError):
             check_registry(bad)
 
-    # --- coverage summary == computed == coverage.json ---
+    # --- coverage summary == computed == coverage.json (G1 base + G5 REQ/DOM/TSK metrics) ---
     def test_coverage_summary_equals_computed(self) -> None:
-        computed = compute_coverage(self.lat, self.con, self.lic, self.intake, self.deliverables)
-        for row in self.summary:
-            self.assertIn(row["指标"], computed, f"覆盖率摘要未知指标 {row['指标']}")
-            self.assertEqual(int(row["计数"]), computed[row["指标"]],
-                             f"{row['指标']} 摘要 {row['计数']} != 现算 {computed[row['指标']]}")
-        cov = read_coverage()
-        for key, value in computed.items():
-            self.assertEqual(cov.get(key), value, f"coverage.json {key} {cov.get(key)} != 现算 {value}")
+        dom, tsk, reqs = load_readiness()
+        computed = compute_coverage(self.lat, self.con, self.lic, self.intake, self.deliverables,
+                                     dom=dom, tsk=tsk, reqs=reqs)
+        check_coverage_against(computed, self.summary, read_coverage())
+
+    def test_g5_metric_summary_row_dropped_rejected(self) -> None:  # counterexample
+        dom, tsk, reqs = load_readiness()
+        computed = compute_coverage(self.lat, self.con, self.lic, self.intake, self.deliverables,
+                                     dom=dom, tsk=tsk, reqs=reqs)
+        bad = [r for r in self.summary if r["指标"] != "九任务 REQ 分母"]
+        with self.assertRaises(AssertionError):
+            check_coverage_against(computed, bad, read_coverage())
+
+    def test_g5_metric_summary_row_tampered_rejected(self) -> None:  # counterexample
+        dom, tsk, reqs = load_readiness()
+        computed = compute_coverage(self.lat, self.con, self.lic, self.intake, self.deliverables,
+                                     dom=dom, tsk=tsk, reqs=reqs)
+        bad = [dict(r) for r in self.summary]
+        row = next(r for r in bad if r["指标"] == "九任务 REQ 分母")
+        row["计数"] = "0"
+        with self.assertRaises(AssertionError):
+            check_coverage_against(computed, bad, read_coverage())
 
     # --- sensitive scan (dep-3 patterns) over evidence text ---
     def test_evidence_files_pass_sensitive_scan(self) -> None:
