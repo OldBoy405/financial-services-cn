@@ -21,12 +21,14 @@ from pathlib import Path
 import _support
 from _support import (
     ACCEPTANCE,
+    M1_ARTIFACT_KINDS,
     M1_BLOCK,
     M1_CASE_SUMMARY_LIMIT,
     M1_LANGUAGES,
     M1_MARKETS,
     M1_NEGATIVE_CASE_KEYS,
     M1_NEGATIVE_TYPES,
+    M1_OPEN_RESULTS,
     M1_POSITIVE_CASE_KEYS,
     RepoTest,
     m1_readiness_problems,
@@ -43,6 +45,21 @@ SHEET_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 CHANGELOG_HEADER = "| 工作表 | 单元格 | 前值 | 后值/公式 | 假设 | 出处/期间 | 理由 |"
 SAMPLE_KEYS = {"location", "expected", "actual", "result"}
 DEVIATION_KEYS = ("requirement", "actual", "reason", "adjudication-ref")
+ARTIFACT_KEYS = {
+    "artifact-id",
+    "case-id",
+    "kind",
+    "path",
+    "sha256",
+    "bytes",
+    "generated-by",
+    "open-check",
+    "structural",
+    "meta",
+    "deviations",
+}
+OPEN_CHECK_KEYS = {"host", "at", "result"}
+STRUCTURAL_KEYS = {"type", "ok", "detail"}
 
 
 def load_slot() -> tuple[dict, dict]:
@@ -225,6 +242,81 @@ def sample_problems(samples: list[dict], sheet_names: list[str], passed: bool) -
     return problems
 
 
+def artifact_keys_problems(artifact: dict) -> list[str]:
+    """TASK-01 §6 whitelist: exact keys, kind enum and enumerated sub-records."""
+    if not isinstance(artifact, dict):
+        return ["artifact must be an object"]
+    label = artifact.get("artifact-id") or "<artifact>"
+    problems = []
+    extra = sorted(set(artifact) - ARTIFACT_KEYS)
+    missing = sorted(ARTIFACT_KEYS - set(artifact))
+    if extra:
+        problems.append(f"artifact {label!r}: keys not allowed: {extra}")
+    if missing:
+        problems.append(f"artifact {label!r}: keys missing: {missing}")
+    if artifact.get("kind") not in M1_ARTIFACT_KINDS:
+        problems.append(f"artifact {label!r}: kind is not allowed: {artifact.get('kind')!r}")
+    if not isinstance(artifact.get("meta"), dict):
+        problems.append(f"artifact {label!r}: meta must be an object")
+    structural = artifact.get("structural")
+    if not isinstance(structural, dict):
+        problems.append(f"artifact {label!r}: structural must be an object")
+    else:
+        extra = sorted(set(structural) - STRUCTURAL_KEYS)
+        missing = sorted(STRUCTURAL_KEYS - set(structural))
+        if extra:
+            problems.append(f"artifact {label!r}: structural keys not allowed: {extra}")
+        if missing:
+            problems.append(f"artifact {label!r}: structural keys missing: {missing}")
+        if not isinstance(structural.get("ok"), bool):
+            problems.append(f"artifact {label!r}: structural.ok must be boolean")
+        if not isinstance(structural.get("detail"), str):
+            problems.append(f"artifact {label!r}: structural.detail must be a string")
+    open_check = artifact.get("open-check")
+    if not isinstance(open_check, dict):
+        problems.append(f"artifact {label!r}: open-check must be an object")
+    else:
+        extra = sorted(set(open_check) - OPEN_CHECK_KEYS)
+        missing = sorted(OPEN_CHECK_KEYS - set(open_check))
+        if extra:
+            problems.append(f"artifact {label!r}: open-check keys not allowed: {extra}")
+        if missing:
+            problems.append(f"artifact {label!r}: open-check keys missing: {missing}")
+        if open_check.get("result") not in M1_OPEN_RESULTS:
+            problems.append(f"artifact {label!r}: open-check.result is not allowed")
+    deviations = artifact.get("deviations")
+    if not isinstance(deviations, list):
+        problems.append(f"artifact {label!r}: deviations must be a list")
+    else:
+        for index, deviation in enumerate(deviations):
+            if not isinstance(deviation, dict):
+                problems.append(f"artifact {label!r}: deviations[{index}] must be an object")
+                continue
+            extra = sorted(set(deviation) - set(DEVIATION_KEYS))
+            missing = sorted(set(DEVIATION_KEYS) - set(deviation))
+            if extra:
+                problems.append(f"artifact {label!r}: deviations[{index}] keys not allowed: {extra}")
+            if missing:
+                problems.append(f"artifact {label!r}: deviations[{index}] keys missing: {missing}")
+            for key in DEVIATION_KEYS:
+                if not str(deviation.get(key) or "").strip():
+                    problems.append(f"artifact {label!r}: deviations[{index}].{key} is required")
+    return problems
+
+
+def open_check_problems(artifact: dict, passed: bool) -> list[str]:
+    """Host identity/time always required; an updated XLSX also needs a successful open."""
+    label = artifact.get("artifact-id")
+    open_check = artifact.get("open-check") if isinstance(artifact.get("open-check"), dict) else {}
+    problems = []
+    for key in ("host", "at"):
+        if not str(open_check.get(key) or "").strip():
+            problems.append(f"artifact {label!r}: open-check.{key} is required")
+    if passed and artifact.get("kind") == "XLSX" and open_check.get("result") != "成功":
+        problems.append(f"artifact {label!r}: updated XLSX open-check must be 成功")
+    return problems
+
+
 def slot_evidence_problems(slot: dict, block: dict) -> list[str]:
     passed = slot.get("research-state") == "通过"
     baseline = (block.get("prerequisites") or {}).get("existing-model", {}).get("baseline-sha256")
@@ -291,11 +383,10 @@ def slot_evidence_problems(slot: dict, block: dict) -> list[str]:
             meta = artifact.get("meta") if isinstance(artifact.get("meta"), dict) else {}
             sheets = meta.get("sheets") if isinstance(meta.get("sheets"), list) else []
             problems += sample_problems(meta.get("samples") or [], sheets, passed)
-            open_check = artifact.get("open-check") if isinstance(artifact.get("open-check"), dict) else {}
-            if passed and open_check.get("result") != "成功":
-                problems.append(f"artifact {artifact_id!r}: updated XLSX open-check must be 成功")
+            problems += open_check_problems(artifact, passed)
         elif kind == "CHANGELOG":
             problems += changelog_artifact_problems(artifact)
+        problems += artifact_keys_problems(artifact)
         problems += model_route_problems(artifact)
         for index, deviation in enumerate(artifact.get("deviations") or []):
             for key in DEVIATION_KEYS:
@@ -416,6 +507,46 @@ class SyntheticChecks(unittest.TestCase):
                 model_route_problems({**unsupported, "meta": {**unsupported["meta"], "retest": "out/evidence/m1/retests/missing.json::" + "a" * 64}})
             )
             self.assertTrue(model_route_problems({**unsupported, "artifact-id": "M1-02-A2"}))
+
+    def test_open_check_host_and_time_are_required(self) -> None:
+        artifact = {
+            "artifact-id": "M1-02-A1",
+            "case-id": "M1-02-P1",
+            "kind": "XLSX",
+            "path": "out/evidence/m1/artifacts/case/model.xlsx",
+            "sha256": "a" * 64,
+            "bytes": 4,
+            "generated-by": "tencent-docs-sheetagent|1.0|tencent-docs-sheetagent",
+            "open-check": {"host": "workbuddy", "at": "2026-10-17T10:00:00+08:00", "result": "成功"},
+            "structural": {"type": "xlsx", "ok": True, "detail": ""},
+            "meta": {"schema-query": "sheet.update", "tool-result": "成功", "table-route": "existing"},
+            "deviations": [],
+        }
+        self.assertEqual(open_check_problems(artifact, True), [])
+        self.assertEqual(
+            open_check_problems({**artifact, "open-check": {**artifact["open-check"], "result": "成功"}}, False),
+            [],
+        )
+        self.assertTrue(
+            open_check_problems({**artifact, "open-check": {**artifact["open-check"], "host": ""}}, True)
+        )
+        self.assertTrue(
+            open_check_problems({**artifact, "open-check": {**artifact["open-check"], "at": ""}}, True)
+        )
+        self.assertTrue(
+            open_check_problems({**artifact, "open-check": {**artifact["open-check"], "result": "未执行"}}, True)
+        )
+        self.assertTrue(artifact_keys_problems({**artifact, "prompt": "逐字输入"}))
+        self.assertTrue(artifact_keys_problems({**artifact, "kind": "SHEET"}))
+        self.assertTrue(
+            artifact_keys_problems({key: value for key, value in artifact.items() if key != "open-check"})
+        )
+        self.assertTrue(artifact_keys_problems({**artifact, "structural": {"type": "xlsx", "ok": True}}))
+        self.assertTrue(
+            artifact_keys_problems(
+                {**artifact, "deviations": [{"requirement": "r", "actual": "a", "reason": "why"}]}
+            )
+        )
 
 
 class RepositoryChecks(RepoTest):

@@ -78,6 +78,61 @@ SKILL_ROWS = {
     "initiating-coverage": "MR-02",
     "model-update": "MR-03",
 }
+ARTIFACT_KEYS = {
+    "artifact-id",
+    "case-id",
+    "kind",
+    "path",
+    "sha256",
+    "bytes",
+    "generated-by",
+    "open-check",
+    "structural",
+    "meta",
+    "deviations",
+}
+OPEN_CHECK_KEYS = {"host", "at", "result"}
+STRUCTURAL_KEYS = {"type", "ok", "detail"}
+DEVIATION_KEYS = ("requirement", "actual", "reason", "adjudication-ref")
+CROSS_SESSION_KEYS = {
+    "reentry-id",
+    "exit-at",
+    "reentry-at",
+    "provided-artifacts",
+    "stage-located",
+    "confirmation",
+    "final-artifact",
+    "result",
+}
+PLUGIN_MANIFESTS = (
+    "plugins/vertical-plugins/equity-research/.claude-plugin/plugin.json",
+    "plugins/agent-plugins/earnings-reviewer/.claude-plugin/plugin.json",
+    "workbuddy-experts/equity-research/.codebuddy-plugin/plugin.json",
+)
+SOURCE_PREFIXES = (
+    "plugins/vertical-plugins/equity-research/skills/earnings-analysis/",
+    "plugins/vertical-plugins/equity-research/skills/model-update/",
+    "plugins/vertical-plugins/equity-research/skills/initiating-coverage/",
+    "plugins/vertical-plugins/equity-research/commands/earnings.md",
+    "plugins/vertical-plugins/equity-research/commands/model-update.md",
+    "plugins/vertical-plugins/equity-research/commands/initiate.md",
+)
+COPY_PREFIXES = (
+    "plugins/agent-plugins/earnings-reviewer/skills/earnings-analysis/",
+    "plugins/agent-plugins/earnings-reviewer/skills/model-update/",
+)
+SKILL_CHANGE_KEYS = {
+    "changed",
+    "verified-package-version",
+    "skill-source-head",
+    "case-id",
+    "source-paths",
+    "copy-paths",
+    "retested-cases",
+    "versions",
+    "wb-custom",
+}
+VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 CREDENTIAL_RE = re.compile(
     r"(?i)(api[_-]?key|access[_-]?key|secret[_-]?key|password\s*[:=]|bearer\s+[a-z0-9._-]{8,}|"
     r"sk-[a-z0-9]{8,}|akia[0-9a-z]{12,})"
@@ -292,6 +347,27 @@ def checklist_problems(items: list[dict], passed: bool) -> list[str]:
     return problems
 
 
+def _registered_artifacts(slot: dict) -> list[dict]:
+    return [artifact for artifact in slot.get("artifacts") or [] if isinstance(artifact, dict)]
+
+
+def _artifact_pairs(artifacts: list[dict]) -> set[tuple[object, object]]:
+    return {(artifact.get("path"), artifact.get("sha256")) for artifact in artifacts}
+
+
+def _replay_originals(artifacts: list[dict], reuse_pairs: set[tuple[object, object]]) -> set[tuple[object, object]]:
+    """Artifacts a redo/revision may not point at: reused targets and the first record per case+kind."""
+    originals = set(reuse_pairs)
+    seen: set[tuple[object, object]] = set()
+    for artifact in artifacts:
+        key = (artifact.get("case-id"), artifact.get("kind"))
+        if key in seen:
+            continue
+        seen.add(key)
+        originals.add((artifact.get("path"), artifact.get("sha256")))
+    return originals
+
+
 def replay_problems(slot: dict) -> list[str]:
     """Replay/revision four-branch contract (SDD §3.3, §4.8)."""
     problems = []
@@ -300,12 +376,19 @@ def replay_problems(slot: dict) -> list[str]:
         return []
     if not isinstance(replay, list):
         return ["replay must be a list"]
-    artifact_pairs = {
-        (artifact.get("path"), artifact.get("sha256"))
-        for artifact in slot.get("artifacts") or []
-        if isinstance(artifact, dict)
-    }
+    artifacts = _registered_artifacts(slot)
+    registered = _artifact_pairs(artifacts)
     keys = {"replay-key", "replay-decision", "diff-summary", "confirmation", "artifact-ref"}
+    reuse_pairs: set[tuple[object, object]] = set()
+    for item in replay:
+        if not isinstance(item, dict) or item.get("replay-decision") != "reuse":
+            continue
+        try:
+            path, digest = split_evidence_ref(item.get("artifact-ref"))
+        except AssertionError:
+            continue
+        reuse_pairs.add((path.relative_to(_support.ROOT).as_posix(), digest))
+    originals = _replay_originals(artifacts, reuse_pairs)
     for index, item in enumerate(replay):
         label = f"replay[{index}]"
         if not isinstance(item, dict):
@@ -339,7 +422,7 @@ def replay_problems(slot: dict) -> list[str]:
                 problems.append(f"{label}.artifact-ref: file is missing")
             elif sha256_file(path) != digest:
                 problems.append(f"{label}.artifact-ref: sha256 does not match")
-            elif (path.relative_to(_support.ROOT).as_posix(), digest) not in artifact_pairs:
+            elif (path.relative_to(_support.ROOT).as_posix(), digest) not in registered:
                 problems.append(f"{label}: reuse must reference an already registered artifact")
         elif decision in ("redo", "revision"):
             for key, value in (("confirmation", confirmation), ("diff-summary", diff_summary)):
@@ -353,12 +436,20 @@ def replay_problems(slot: dict) -> list[str]:
             except AssertionError as exc:
                 problems.append(f"{label}.artifact-ref: {exc}")
                 continue
+            pair = (path.relative_to(_support.ROOT).as_posix(), digest)
             if not path.is_file():
                 problems.append(f"{label}.artifact-ref: file is missing")
             elif sha256_file(path) != digest:
                 problems.append(f"{label}.artifact-ref: sha256 does not match")
-            elif (path.relative_to(_support.ROOT).as_posix(), digest) in artifact_pairs:
-                problems.append(f"{label}: {decision} must produce a new artifact, not overwrite the original")
+            elif pair not in registered:
+                problems.append(
+                    f"{label}: {decision} must register the new artifact (new artifact-id and file) in "
+                    "slots.artifacts, not an unindexed copy"
+                )
+            elif pair in originals:
+                problems.append(
+                    f"{label}: {decision} must produce a new artifact, not reuse or overwrite the replaced original"
+                )
         else:  # confirmation-rejected
             if ref:
                 problems.append(f"{label}: confirmation-rejected must not produce a formal revision")
@@ -369,6 +460,31 @@ def replay_problems(slot: dict) -> list[str]:
     return problems
 
 
+def _path_list_problems(value: object, label: str, prefixes: tuple[str, ...], allow_empty: bool) -> list[str]:
+    if not isinstance(value, list) or (not value and not allow_empty):
+        return [f"{label} must be a non-empty list of repository paths"]
+    problems = []
+    for index, path in enumerate(value):
+        if not isinstance(path, str) or not path.strip():
+            problems.append(f"{label}[{index}] must be a non-empty repository path")
+        elif not any(path == prefix or path.startswith(prefix) for prefix in prefixes):
+            problems.append(f"{label}[{index}] is outside the approved conditional paths: {path!r}")
+    return problems
+
+
+def _versions_problems(value: object, label: str) -> list[str]:
+    """`versions` registers the bumped plugin.json path -> new three-part version."""
+    if not isinstance(value, dict) or not value:
+        return [f"{label} must register the bumped plugin.json paths and versions"]
+    problems = []
+    for path, version in value.items():
+        if path not in PLUGIN_MANIFESTS:
+            problems.append(f"{label}: {path!r} is not an approved plugin manifest")
+        if not isinstance(version, str) or not VERSION_RE.match(version):
+            problems.append(f"{label}: {path!r} needs a three-part version, got {version!r}")
+    return problems
+
+
 def skill_change_problems(slot: dict, block: dict) -> list[str]:
     """FR-09: no change is the default; a change must be traceable to a real case."""
     problems = []
@@ -376,7 +492,13 @@ def skill_change_problems(slot: dict, block: dict) -> list[str]:
     label = f"{slot.get('slot')}.skill-change"
     if not isinstance(record, dict):
         return [f"{label} must be an object"]
+    extra = sorted(set(record) - SKILL_CHANGE_KEYS)
+    if extra:
+        problems.append(f"{label} keys not allowed: {extra}")
     if record.get("changed") is not True:
+        extra = sorted(set(record) - {"changed", "verified-package-version", "skill-source-head"})
+        if extra:
+            problems.append(f"{label} keys not allowed when changed=false: {extra}")
         if not str(record.get("verified-package-version") or "").strip():
             problems.append(f"{label}.verified-package-version is required when changed=false")
         head = record.get("skill-source-head")
@@ -390,10 +512,20 @@ def skill_change_problems(slot: dict, block: dict) -> list[str]:
     case_ids = {case.get("case-id") for case in _slot_cases(slot)}
     if record.get("case-id") not in case_ids:
         problems.append(f"{label}.case-id must hit a real case in this slot")
-    for key in ("source-paths", "copy-paths", "retested-cases", "versions"):
-        value = record.get(key)
-        if not value:
-            problems.append(f"{label}.{key} is required when changed=true")
+    skill = slot.get("skill")
+    problems += _path_list_problems(record.get("source-paths"), f"{label}.source-paths", SOURCE_PREFIXES, False)
+    copy_prefixes = tuple(prefix for prefix in COPY_PREFIXES if skill in prefix)
+    problems += _path_list_problems(record.get("copy-paths"), f"{label}.copy-paths", copy_prefixes or ("",), True)
+    if not copy_prefixes and record.get("copy-paths"):
+        problems.append(f"{label}.copy-paths: {skill!r} has no bundled agent copy")
+    retested = record.get("retested-cases")
+    if not isinstance(retested, list) or not retested:
+        problems.append(f"{label}.retested-cases is required when changed=true")
+    else:
+        for index, case_id in enumerate(retested):
+            if case_id not in case_ids:
+                problems.append(f"{label}.retested-cases[{index}] must hit a real case in this slot")
+    problems += _versions_problems(record.get("versions"), f"{label}.versions")
     if not str(record.get("wb-custom") or "").strip():
         problems.append(f"{label}.wb-custom is required when changed=true")
     return problems
@@ -472,35 +604,76 @@ def _artifact_identity_problems(slot: dict) -> list[str]:
             problems.append(f"{slot.get('slot')}: artifact must be an object")
             continue
         artifact_id = artifact.get("artifact-id")
+        extra = sorted(set(artifact) - ARTIFACT_KEYS)
+        missing = sorted(ARTIFACT_KEYS - set(artifact))
+        if extra:
+            problems.append(f"artifact {artifact_id!r}: keys not allowed: {extra}")
+        if missing:
+            problems.append(f"artifact {artifact_id!r}: keys missing: {missing}")
         if not str(artifact_id or "").strip():
             problems.append(f"{slot.get('slot')}: artifact-id is required")
         elif artifact_id in seen_ids:
             problems.append(f"{slot.get('slot')}: duplicate artifact-id {artifact_id!r}")
         seen_ids.add(artifact_id)
+        if artifact.get("kind") not in M1_ARTIFACT_KINDS:
+            problems.append(f"artifact {artifact_id!r}: kind is not allowed: {artifact.get('kind')!r}")
         if artifact.get("case-id") not in case_ids:
             problems.append(f"{slot.get('slot')}: artifact {artifact_id!r} case-id misses a slot case")
+        for key in ("path", "sha256", "generated-by"):
+            value = artifact.get(key)
+            if not isinstance(value, str) or not value.strip():
+                problems.append(f"artifact {artifact_id!r}: {key} must be a non-empty string")
+        size = artifact.get("bytes")
+        if not isinstance(size, int) or isinstance(size, bool) or size < 0:
+            problems.append(f"artifact {artifact_id!r}: bytes must be a non-negative integer")
+        if not isinstance(artifact.get("meta"), dict):
+            problems.append(f"artifact {artifact_id!r}: meta must be an object")
         structural = artifact.get("structural")
         if not isinstance(structural, dict):
             problems.append(f"artifact {artifact_id!r}: structural must be an object")
         else:
+            extra = sorted(set(structural) - STRUCTURAL_KEYS)
+            missing = sorted(STRUCTURAL_KEYS - set(structural))
+            if extra:
+                problems.append(f"artifact {artifact_id!r}: structural keys not allowed: {extra}")
+            if missing:
+                problems.append(f"artifact {artifact_id!r}: structural keys missing: {missing}")
             if structural.get("type") not in ("docx", "xlsx", "zip", "markdown"):
                 problems.append(f"artifact {artifact_id!r}: structural.type is not allowed")
             if not isinstance(structural.get("ok"), bool):
                 problems.append(f"artifact {artifact_id!r}: structural.ok must be boolean")
+            if not isinstance(structural.get("detail"), str):
+                problems.append(f"artifact {artifact_id!r}: structural.detail must be a string")
         open_check = artifact.get("open-check")
         if not isinstance(open_check, dict):
             problems.append(f"artifact {artifact_id!r}: open-check must be an object")
         else:
-            for key in ("host", "at", "result"):
-                if key not in open_check:
-                    problems.append(f"artifact {artifact_id!r}: open-check.{key} is missing")
+            extra = sorted(set(open_check) - OPEN_CHECK_KEYS)
+            missing = sorted(OPEN_CHECK_KEYS - set(open_check))
+            if extra:
+                problems.append(f"artifact {artifact_id!r}: open-check keys not allowed: {extra}")
+            if missing:
+                problems.append(f"artifact {artifact_id!r}: open-check keys missing: {missing}")
+            for key in ("host", "at"):
+                if not str(open_check.get(key) or "").strip():
+                    problems.append(f"artifact {artifact_id!r}: open-check.{key} is required")
             if open_check.get("result") not in M1_OPEN_RESULTS:
                 problems.append(f"artifact {artifact_id!r}: open-check.result is not allowed")
-        for index, deviation in enumerate(artifact.get("deviations") or []):
+        deviations = artifact.get("deviations")
+        if not isinstance(deviations, list):
+            problems.append(f"artifact {artifact_id!r}: deviations must be a list")
+            continue
+        for index, deviation in enumerate(deviations):
             if not isinstance(deviation, dict):
                 problems.append(f"artifact {artifact_id!r}: deviations[{index}] must be an object")
                 continue
-            for key in ("requirement", "actual", "reason", "adjudication-ref"):
+            extra = sorted(set(deviation) - set(DEVIATION_KEYS))
+            missing = sorted(set(DEVIATION_KEYS) - set(deviation))
+            if extra:
+                problems.append(f"artifact {artifact_id!r}: deviations[{index}] keys not allowed: {extra}")
+            if missing:
+                problems.append(f"artifact {artifact_id!r}: deviations[{index}] keys missing: {missing}")
+            for key in DEVIATION_KEYS:
                 if not str(deviation.get(key) or "").strip():
                     problems.append(f"artifact {artifact_id!r}: deviations[{index}].{key} is required")
     return problems
@@ -589,6 +762,59 @@ def _top_level_problems(block: dict) -> list[str]:
     return problems
 
 
+def _evidence_ref_problems(ref: object, label: str) -> list[str]:
+    try:
+        path, digest = split_evidence_ref(ref)
+    except AssertionError as exc:
+        return [f"{label}: {exc}"]
+    if not path.is_file():
+        return [f"{label}: referenced file is missing"]
+    if sha256_file(path) != digest:
+        return [f"{label}: sha256 does not match the referenced file"]
+    return []
+
+
+def _cross_session_shape_problems(record: object) -> list[str]:
+    """TASK-01 §6 cross-session key/ref/hash/stage contract for any non-null record."""
+    if not isinstance(record, dict):
+        return ["cross-session must be an object or null"]
+    problems = []
+    extra = sorted(set(record) - CROSS_SESSION_KEYS)
+    missing = sorted(CROSS_SESSION_KEYS - set(record))
+    if extra:
+        problems.append(f"cross-session keys not allowed: {extra}")
+    if missing:
+        problems.append(f"cross-session keys missing: {missing}")
+    for key in ("reentry-id", "exit-at", "reentry-at", "stage-located", "confirmation", "final-artifact"):
+        if not str(record.get(key) or "").strip():
+            problems.append(f"cross-session.{key} is required")
+    if not re.match(r"^Task [2-5]$", str(record.get("stage-located") or "")):
+        problems.append(f"cross-session.stage-located must be Task 2..5, got {record.get('stage-located')!r}")
+    exit_at = reentry_at = None
+    for key in ("exit-at", "reentry-at"):
+        try:
+            parsed = datetime.datetime.fromisoformat(str(record.get(key) or ""))
+        except ValueError:
+            problems.append(f"cross-session.{key} must be an ISO8601 timestamp")
+            continue
+        if parsed.tzinfo is None:
+            problems.append(f"cross-session.{key} must carry a timezone")
+        elif key == "exit-at":
+            exit_at = parsed
+        else:
+            reentry_at = parsed
+    if exit_at is not None and reentry_at is not None and not reentry_at > exit_at:
+        problems.append("cross-session.reentry-at must be after exit-at")
+    provided = record.get("provided-artifacts")
+    if not isinstance(provided, list) or not provided:
+        problems.append("cross-session.provided-artifacts must be a non-empty list")
+        provided = []
+    for index, ref in enumerate(provided):
+        problems += _evidence_ref_problems(ref, f"cross-session.provided-artifacts[{index}]")
+    problems += _evidence_ref_problems(record.get("final-artifact"), "cross-session.final-artifact")
+    return problems
+
+
 def _slot_shape_problems(slot: dict) -> list[str]:
     keys = {
         "slot",
@@ -618,10 +844,13 @@ def _slot_shape_problems(slot: dict) -> list[str]:
     for key in ("positive-cases", "negative-cases", "quality-checklist", "artifacts", "replay"):
         if not isinstance(slot.get(key), list):
             problems.append(f"{slot.get('slot')}.{key} must be a list")
+    record = slot.get("cross-session")
+    if record is not None:
+        problems += _cross_session_shape_problems(record)
     return problems
 
 
-def _manifest_version(before: str, after: str) -> list[str]:
+def _manifest_version(before: str, after: str, expected: str | None = None) -> list[str]:
     problems = []
     try:
         old = json.loads(before)
@@ -634,7 +863,7 @@ def _manifest_version(before: str, after: str) -> list[str]:
     new_version = new.pop("version", None)
     if old != new:
         problems.append("only the top-level version may change in plugin.json")
-    pattern = re.compile(r"^\d+\.\d+\.\d+$")
+    pattern = VERSION_RE
     if not isinstance(old_version, str) or not pattern.match(old_version):
         problems.append(f"old plugin version is not three non-negative integers: {old_version!r}")
     if not isinstance(new_version, str) or not pattern.match(new_version):
@@ -642,6 +871,10 @@ def _manifest_version(before: str, after: str) -> list[str]:
     if isinstance(old_version, str) and isinstance(new_version, str) and pattern.match(old_version) and pattern.match(new_version):
         if tuple(map(int, new_version.split("."))) <= tuple(map(int, old_version.split("."))):
             problems.append("plugin version must strictly increase")
+    if not isinstance(expected, str) or not pattern.match(expected):
+        problems.append(f"versions must register a three-part version for this plugin.json, got {expected!r}")
+    elif isinstance(new_version, str) and new_version != expected:
+        problems.append(f"plugin version {new_version!r} must equal the versions record {expected!r}")
     return problems
 
 
@@ -708,6 +941,9 @@ COMMAND_FILES = {
 }
 
 
+CUSTOM_PATH_RE = re.compile(r"(?:baseline/[^:\s|`]+:)?((?:plugins|workbuddy-experts|scripts)/[^\s|`（）()]+)")
+
+
 def _custom_rows(text: str) -> dict[str, list[str]]:
     rows = {}
     for line in text.split("\n"):
@@ -720,30 +956,42 @@ def _custom_rows(text: str) -> dict[str, list[str]]:
     return rows
 
 
-def _custom_is_target(cells: list[str], affected: set[str]) -> bool:
-    haystack = " ".join(cells)
-    for skill in affected:
-        if f"skills/{skill}/" in haystack:
-            return True
-        command = COMMAND_FILES.get(skill)
-        if command and f"commands/{command}" in haystack:
-            return True
+def _custom_row_paths(cells: list[str]) -> set[str]:
+    """Repository paths a WB-CUSTOM row names (files, or directories ending with '/')."""
+    paths = set()
+    for cell in cells:
+        for match in CUSTOM_PATH_RE.finditer(cell):
+            paths.add(match.group(1))
+    return paths
+
+
+def _custom_path_registered(path: str, allowed_paths: set[str]) -> bool:
+    if path in allowed_paths:
+        return True
+    if path.endswith("/"):
+        return any(entry.startswith(path) for entry in allowed_paths)
     return False
 
 
-def _custom_stripped(text: str, affected: set[str]) -> str:
+def _custom_is_target(cells: list[str], allowed_paths: set[str]) -> bool:
+    return any(_custom_path_registered(path, allowed_paths) for path in _custom_row_paths(cells))
+
+
+def _custom_stripped(text: str, allowed_paths: set[str]) -> str:
     out = []
     for line in text.split("\n"):
         if line.startswith("| WB-CUSTOM-"):
             cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-            if len(cells) >= 6 and _custom_is_target(cells, affected):
+            if len(cells) >= 6 and _custom_is_target(cells, allowed_paths):
                 out.append(cells[0] + "|<MASKED>")
                 continue
         out.append(line)
     return "\n".join(out)
 
 
-def _custom_problems(before: str, after: str, affected: set[str]) -> list[str]:
+def _custom_problems(before: str, after: str, allowed_paths: set[str]) -> list[str]:
+    if not allowed_paths:
+        return ["CUSTOM.md: no registered source-paths/copy-paths authorize any WB-CUSTOM row"]
     old_rows = _custom_rows(before)
     new_rows = _custom_rows(after)
     if set(old_rows) != set(new_rows):
@@ -755,29 +1003,54 @@ def _custom_problems(before: str, after: str, affected: set[str]) -> list[str]:
         if len(old_cells) != len(new_cells):
             problems.append(f"CUSTOM.md: {row_id} column count changed")
             continue
-        targeted = _custom_is_target(old_cells, affected) or _custom_is_target(new_cells, affected)
+        targeted = _custom_is_target(old_cells, allowed_paths) or _custom_is_target(new_cells, allowed_paths)
         if targeted:
+            unregistered = sorted(
+                {
+                    path
+                    for path in _custom_row_paths(old_cells) | _custom_row_paths(new_cells)
+                    if not _custom_path_registered(path, allowed_paths)
+                }
+            )
+            if unregistered:
+                problems.append(
+                    f"CUSTOM.md: {row_id} names paths outside the registered source-paths/copy-paths: {unregistered}"
+                )
             if old_cells[0:3] != new_cells[0:3] or old_cells[4] != new_cells[4]:
                 problems.append(f"CUSTOM.md: {row_id} stable cells changed")
         elif old_cells != new_cells:
             problems.append(f"CUSTOM.md: unrelated row {row_id} changed")
     if problems:
         return problems
-    if _custom_stripped(before, affected) != _custom_stripped(after, affected):
+    if _custom_stripped(before, allowed_paths) != _custom_stripped(after, allowed_paths):
         return ["CUSTOM.md: changes outside the permitted WB-CUSTOM cells"]
     return []
 
 
-def conditional_content_problems(path: str, before: str, after: str, affected_skills: set[str]) -> list[str]:
+def conditional_content_problems(
+    path: str,
+    before: str,
+    after: str,
+    affected_skills: set[str],
+    versions: dict | None = None,
+    paths: set[str] | None = None,
+) -> list[str]:
     """Second scope layer: what a conditional file is allowed to change in content."""
     name = path.replace("\\", "/")
-    if name.endswith("plugin.json"):
-        return _manifest_version(before, after)
+    if name in PLUGIN_MANIFESTS:
+        registered = versions if isinstance(versions, dict) else {}
+        return _manifest_version(before, after, registered.get(name))
     if name == "workbuddy-experts/equity-research/README.md":
         return _readme_problems(before, after, affected_skills)
     if name == "CUSTOM.md":
-        return _custom_problems(before, after, affected_skills)
-    return [f"{name}: conditional path has no content rule"]
+        return _custom_problems(before, after, set(paths or ()))
+    skills = skills_for_path(name)
+    if not skills:
+        return [f"{name}: conditional path has no content rule"]
+    unauthorized = sorted(skills - affected_skills)
+    if unauthorized:
+        return [f"{name}: skill change is not authorized for {', '.join(unauthorized)}"]
+    return []
 
 
 def skills_for_path(path: str) -> set[str]:
@@ -804,6 +1077,22 @@ def skills_for_path(path: str) -> set[str]:
     if path in shared:
         return {"earnings-analysis", "model-update", "initiating-coverage"}
     return set()
+
+
+def _skill_change_path_registered(path: str, record: dict) -> bool:
+    """A changed conditional path must be registered by the same slot's skill-change record."""
+    source_paths = set(record.get("source-paths") or [])
+    copy_paths = set(record.get("copy-paths") or [])
+    if path in source_paths or path in copy_paths:
+        return True
+    versions = record.get("versions") if isinstance(record.get("versions"), dict) else {}
+    if path in PLUGIN_MANIFESTS:
+        return bool(str(versions.get(path) or "").strip())
+    if path == "CUSTOM.md":
+        return bool(str(record.get("wb-custom") or "").strip())
+    if path == "workbuddy-experts/equity-research/README.md":
+        return True
+    return False
 
 
 def scope_problems(changed: list[str], block: dict) -> list[str]:
@@ -833,14 +1122,14 @@ def scope_problems(changed: list[str], block: dict) -> list[str]:
             case_ids = {case.get("case-id") for case in _slot_cases(slot)}
             if record.get("case-id") not in case_ids:
                 continue
-            if not all(record.get(key) for key in ("source-paths", "copy-paths", "versions")):
+            if not _skill_change_path_registered(path, record):
                 continue
             accepted = True
             break
         if not accepted:
             problems.append(
                 f"{path}: conditional path needs the same slot's skill-change.changed=true with a real case-id "
-                "and source-paths/copy-paths/versions"
+                "and path-level registration (source-paths/copy-paths, plugin.json version, CUSTOM row, README row)"
             )
     return problems
 
@@ -1175,16 +1464,16 @@ class ContractSelfChecks(unittest.TestCase):
             no_adjudication["deviations"][0]["adjudication-ref"] = "out/evidence/m1/adjudications/missing.json::" + "b" * 64
             self.assertTrue(m1_tool_record_problems(no_adjudication, ("tencent-docx",)))
 
-    def test_replay_four_branches(self) -> None:
+    def test_replay_requires_a_registered_new_revision(self) -> None:
         with temp_root() as root:
             original = write_evidence(root, "out/evidence/m1/artifacts/case/report.docx", b"original")
             revised = write_evidence(root, "out/evidence/m1/artifacts/case/report-rev2.docx", b"revised")
+            original_pair = {"path": original.rsplit("::", 1)[0], "sha256": original.rsplit("::", 1)[1]}
+            revised_pair = {"path": revised.rsplit("::", 1)[0], "sha256": revised.rsplit("::", 1)[1]}
             slot = {
                 "artifacts": [
-                    {
-                        "path": "out/evidence/m1/artifacts/case/report.docx",
-                        "sha256": original.rsplit("::", 1)[1],
-                    }
+                    {"artifact-id": "A-1", "case-id": "M1-01-P1", "kind": "DOCX", **original_pair},
+                    {"artifact-id": "A-2", "case-id": "M1-01-P1", "kind": "DOCX", **revised_pair},
                 ],
                 "replay": [
                     {
@@ -1197,29 +1486,121 @@ class ContractSelfChecks(unittest.TestCase):
                 ],
             }
             self.assertEqual(replay_problems(slot), [])
-            for decision, ref, extra in (
-                ("redo", revised, {"confirmation": "redo asked", "diff-summary": "new file"}),
-                ("revision", revised, {"confirmation": "revision confirmed", "diff-summary": "inputs changed"}),
-                (
-                    "confirmation-rejected",
-                    "",
-                    {"confirmation": "rejected", "diff-summary": "rejected diff"},
-                ),
-            ):
+            for decision in ("redo", "revision"):
                 item = {
                     "replay-key": "k2",
                     "replay-decision": decision,
                     "diff-summary": "diff",
                     "confirmation": "confirmation",
-                    "artifact-ref": ref,
-                    **extra,
+                    "artifact-ref": revised,
                 }
-                self.assertEqual(replay_problems({**slot, "replay": [item]}), [])
+                self.assertEqual(replay_problems({**slot, "replay": slot["replay"] + [item]}), [])
+            overwrite = {
+                "replay-key": "k3",
+                "replay-decision": "redo",
+                "diff-summary": "diff",
+                "confirmation": "confirmation",
+                "artifact-ref": original,
+            }
+            self.assertTrue(replay_problems({**slot, "replay": slot["replay"] + [overwrite]}))
+            unregistered = write_evidence(root, "out/evidence/m1/artifacts/case/report-rev3.docx", b"rev3")
+            self.assertTrue(
+                replay_problems({**slot, "replay": slot["replay"] + [{**overwrite, "artifact-ref": unregistered}]})
+            )
             self.assertTrue(
                 replay_problems(
                     {**slot, "replay": [{**slot["replay"][0], "artifact-ref": original.replace("::", "")}]}
                 )
             )
+
+    def test_artifact_whitelist_is_closed(self) -> None:
+        deviation = {"requirement": "r", "actual": "a", "reason": "why", "adjudication-ref": "out/x::" + "b" * 64}
+        artifact = {
+            "artifact-id": "A-1",
+            "case-id": "M1-01-P1",
+            "kind": "SUMMARY",
+            "path": "out/evidence/m1/artifacts/case/summary.md",
+            "sha256": "a" * 64,
+            "bytes": 7,
+            "generated-by": "host|1|host-preview",
+            "open-check": {"host": "workbuddy", "at": "2026-10-17T10:00:00+08:00", "result": "成功"},
+            "structural": {"type": "markdown", "ok": True, "detail": ""},
+            "meta": {"schema-query": "md", "tool-result": "成功"},
+            "deviations": [deviation],
+        }
+        slot = {
+            "slot": "M1-01",
+            "positive-cases": [{"case-id": "M1-01-P1"}],
+            "negative-cases": [],
+            "artifacts": [artifact],
+        }
+        self.assertEqual(_artifact_identity_problems(slot), [])
+        self.assertTrue(_artifact_identity_problems({**slot, "artifacts": [{**artifact, "prompt": "逐字输入"}]}))
+        self.assertTrue(_artifact_identity_problems({**slot, "artifacts": [{**artifact, "response": "逐字响应"}]}))
+        self.assertTrue(_artifact_identity_problems({**slot, "artifacts": [{**artifact, "kind": "SHEET"}]}))
+        missing_key = {key: value for key, value in artifact.items() if key != "meta"}
+        self.assertTrue(_artifact_identity_problems({**slot, "artifacts": [missing_key]}))
+        self.assertTrue(
+            _artifact_identity_problems(
+                {**slot, "artifacts": [{**artifact, "open-check": {**artifact["open-check"], "host": ""}}]}
+            )
+        )
+        self.assertTrue(
+            _artifact_identity_problems(
+                {**slot, "artifacts": [{**artifact, "open-check": {**artifact["open-check"], "at": ""}}]}
+            )
+        )
+        self.assertTrue(
+            _artifact_identity_problems(
+                {**slot, "artifacts": [{**artifact, "open-check": {**artifact["open-check"], "note": "x"}}]}
+            )
+        )
+        self.assertTrue(
+            _artifact_identity_problems(
+                {**slot, "artifacts": [{**artifact, "structural": {"type": "markdown", "ok": True}}]}
+            )
+        )
+        self.assertTrue(
+            _artifact_identity_problems(
+                {**slot, "artifacts": [{**artifact, "deviations": [{"requirement": "r", "actual": "a", "reason": "why"}]}]}
+            )
+        )
+        self.assertTrue(
+            _artifact_identity_problems(
+                {**slot, "artifacts": [{**artifact, "deviations": [{**deviation, "note": "x"}]}]}
+            )
+        )
+
+    def test_cross_session_shape_is_closed(self) -> None:
+        with temp_root() as root:
+            provided = write_evidence(root, "out/evidence/m1/artifacts/M1-03-T1/report.md", b"report")
+            final = write_evidence(root, "out/evidence/m1/artifacts/M1-03-T5/final.docx", b"final")
+            record = {
+                "reentry-id": "R1",
+                "exit-at": "2026-10-17T10:00:00+08:00",
+                "reentry-at": "2026-10-17T11:00:00+08:00",
+                "provided-artifacts": [provided],
+                "stage-located": "Task 2",
+                "confirmation": "用户确认从 Task 2 继续",
+                "final-artifact": final,
+                "result": "待测",
+            }
+            self.assertEqual(_cross_session_shape_problems(record), [])
+            self.assertTrue(
+                _cross_session_shape_problems({key: value for key, value in record.items() if key != "confirmation"})
+            )
+            self.assertTrue(
+                _cross_session_shape_problems(
+                    {**record, "provided-artifacts": [provided.rsplit("::", 1)[0] + "::" + "c" * 64]}
+                )
+            )
+            self.assertTrue(
+                _cross_session_shape_problems(
+                    {**record, "final-artifact": "out/evidence/m1/missing.docx::" + "d" * 64}
+                )
+            )
+            self.assertTrue(_cross_session_shape_problems({**record, "stage-located": "Task 1"}))
+            self.assertTrue(_cross_session_shape_problems({**record, "reentry-at": "2026-10-17T09:00:00+08:00"}))
 
     def test_scope_path_and_trigger_layer(self) -> None:
         block = {
@@ -1254,36 +1635,89 @@ class ContractSelfChecks(unittest.TestCase):
         self.assertEqual(scope_problems(["scripts/check.py"], block)[0][:10], "scripts/ch")
         self.assertTrue(scope_problems(["plugins/vertical-plugins/equity-research/skills/earnings-preview/SKILL.md"], block))
         target = "plugins/vertical-plugins/equity-research/skills/earnings-analysis/SKILL.md"
+        command = "plugins/vertical-plugins/equity-research/commands/earnings.md"
+        copy = "plugins/agent-plugins/earnings-reviewer/skills/earnings-analysis/SKILL.md"
+        manifest = "plugins/vertical-plugins/equity-research/.claude-plugin/plugin.json"
         self.assertTrue(scope_problems([target], block))
         changed = json.loads(json.dumps(block))
         changed["slots"][0]["skill-change"] = {
             "changed": True,
             "case-id": "M1-01-P1",
-            "source-paths": [target],
-            "copy-paths": ["plugins/agent-plugins/earnings-reviewer/skills/earnings-analysis/SKILL.md"],
-            "versions": {"plugin-version": "0.11.1"},
+            "source-paths": [target, command],
+            "copy-paths": [copy],
+            "retested-cases": ["M1-01-P1"],
+            "versions": {manifest: "0.11.1"},
             "wb-custom": "WB-CUSTOM-01",
         }
-        self.assertEqual(scope_problems([target], changed), [])
+        self.assertEqual(
+            scope_problems(
+                [target, command, copy, manifest, "CUSTOM.md", "workbuddy-experts/equity-research/README.md"],
+                changed,
+            ),
+            [],
+        )
+        self.assertEqual(skill_change_problems(changed["slots"][0], {}), [])
+        omitted = json.loads(json.dumps(changed))
+        omitted["slots"][0]["skill-change"]["copy-paths"] = []
+        self.assertTrue(scope_problems([copy], omitted))
+        wrong_version = json.loads(json.dumps(changed))
+        wrong_version["slots"][0]["skill-change"]["versions"] = {
+            "plugins/agent-plugins/earnings-reviewer/.claude-plugin/plugin.json": "0.11.1"
+        }
+        self.assertTrue(scope_problems([manifest], wrong_version))
         wrong_case = json.loads(json.dumps(changed))
         wrong_case["slots"][0]["skill-change"]["case-id"] = "nope"
         self.assertTrue(scope_problems([target], wrong_case))
+        bad_version = json.loads(json.dumps(changed["slots"][0]))
+        bad_version["skill-change"]["versions"] = {manifest: "0.11"}
+        self.assertTrue(skill_change_problems(bad_version, {}))
+        unregistered_source = json.loads(json.dumps(changed["slots"][0]))
+        unregistered_source["skill-change"]["source-paths"] = ["scripts/check.py"]
+        self.assertTrue(skill_change_problems(unregistered_source, {}))
+        initiate = {
+            "slot": "M1-03",
+            "skill": "initiating-coverage",
+            "positive-cases": [{"case-id": "M1-03-P1"}],
+            "negative-cases": [],
+            "skill-change": {
+                "changed": True,
+                "case-id": "M1-03-P1",
+                "source-paths": ["plugins/vertical-plugins/equity-research/skills/initiating-coverage/SKILL.md"],
+                "copy-paths": [copy],
+                "retested-cases": ["M1-03-P1"],
+                "versions": {manifest: "0.11.1"},
+                "wb-custom": "WB-CUSTOM-02",
+            },
+        }
+        self.assertTrue(skill_change_problems(initiate, {}))
 
     def test_conditional_content_layer(self) -> None:
         before_plugin = json.dumps({"name": "pkg", "version": "0.11.0"}, indent=2) + "\n"
         after_plugin = json.dumps({"name": "pkg", "version": "0.11.1"}, indent=2) + "\n"
         path = "plugins/vertical-plugins/equity-research/.claude-plugin/plugin.json"
-        self.assertEqual(conditional_content_problems(path, before_plugin, after_plugin, {"earnings-analysis"}), [])
-        renamed = json.dumps({"name": "other", "version": "0.11.1"}, indent=2) + "\n"
-        self.assertTrue(conditional_content_problems(path, before_plugin, renamed, {"earnings-analysis"}))
-        self.assertTrue(
-            conditional_content_problems(
-                path,
-                before_plugin,
-                json.dumps({"name": "pkg", "version": "0.11.0"}, indent=2) + "\n",
-                {"earnings-analysis"},
-            )
+        self.assertEqual(
+            conditional_content_problems(path, before_plugin, after_plugin, {"earnings-analysis"}, {path: "0.11.1"}),
+            [],
         )
+        self.assertTrue(conditional_content_problems(path, before_plugin, after_plugin, {"earnings-analysis"}))
+        self.assertTrue(
+            conditional_content_problems(path, before_plugin, after_plugin, {"earnings-analysis"}, {path: "0.11.2"})
+        )
+        renamed = json.dumps({"name": "other", "version": "0.11.1"}, indent=2) + "\n"
+        self.assertTrue(
+            conditional_content_problems(path, before_plugin, renamed, {"earnings-analysis"}, {path: "0.11.1"})
+        )
+        unchanged = json.dumps({"name": "pkg", "version": "0.11.0"}, indent=2) + "\n"
+        self.assertTrue(
+            conditional_content_problems(path, before_plugin, unchanged, {"earnings-analysis"}, {path: "0.11.0"})
+        )
+        skill_source = "plugins/vertical-plugins/equity-research/skills/earnings-analysis/SKILL.md"
+        skill_copy = "plugins/agent-plugins/earnings-reviewer/skills/earnings-analysis/SKILL.md"
+        skill_command = "plugins/vertical-plugins/equity-research/commands/earnings.md"
+        self.assertEqual(conditional_content_problems(skill_source, "old", "new", {"earnings-analysis"}), [])
+        self.assertEqual(conditional_content_problems(skill_copy, "old", "new", {"earnings-analysis"}), [])
+        self.assertEqual(conditional_content_problems(skill_command, "old", "new", {"earnings-analysis"}), [])
+        self.assertTrue(conditional_content_problems(skill_source, "old", "new", {"model-update"}))
         readme_before = (
             "## 2. 九项映射\n\n"
             "| # | 原命令 | 唯一技能 | 状态 | 验收方法 |\n"
@@ -1336,8 +1770,17 @@ class ContractSelfChecks(unittest.TestCase):
                 custom_before,
                 custom_after,
                 {"earnings-analysis", "model-update"},
+                paths={skill_source, skill_copy},
             ),
             [],
+        )
+        self.assertTrue(
+            conditional_content_problems("CUSTOM.md", custom_before, custom_after, {"earnings-analysis"}, paths=set())
+        )
+        self.assertTrue(
+            conditional_content_problems(
+                "CUSTOM.md", custom_before, custom_after, {"earnings-analysis"}, paths={skill_command}
+            )
         )
         unrelated = custom_before.replace(
             "| `…/skills/model-update/SKILL.md` → 同路径 | 原语义 |",
@@ -1345,10 +1788,7 @@ class ContractSelfChecks(unittest.TestCase):
         )
         self.assertTrue(
             conditional_content_problems(
-                "CUSTOM.md",
-                custom_before,
-                unrelated,
-                {"earnings-analysis"},
+                "CUSTOM.md", custom_before, unrelated, {"earnings-analysis"}, paths={skill_source}
             )
         )
 
@@ -1440,14 +1880,20 @@ class RepositoryContract(RepoTest):
         self.assertEqual(scope_problems(changed, block), [])
         conditional = [path for path in changed if skills_for_path(path)]
         affected = set()
+        versions: dict[str, str] = {}
+        allowed_paths: set[str] = set()
         for slot in block.get("slots") or []:
             record = slot.get("skill-change") if isinstance(slot.get("skill-change"), dict) else {}
             if record.get("changed") is True:
                 affected.add(slot.get("skill"))
+                allowed_paths.update(record.get("source-paths") or [])
+                allowed_paths.update(record.get("copy-paths") or [])
+                if isinstance(record.get("versions"), dict):
+                    versions.update(record["versions"])
         for path in conditional:
             before, after = full_context_pair(controlled_diff(path, 999999), (_support.ROOT / path).read_text(encoding="utf-8"))
             self.assertEqual(
-                conditional_content_problems(path, before, after, affected),
+                conditional_content_problems(path, before, after, affected, versions, allowed_paths),
                 [],
                 f"{path} has a content-level scope violation",
             )

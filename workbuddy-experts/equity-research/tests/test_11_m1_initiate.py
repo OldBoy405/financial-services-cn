@@ -23,6 +23,7 @@ from pathlib import Path
 import _support
 from _support import (
     ACCEPTANCE,
+    M1_ARTIFACT_KINDS,
     M1_BLOCK,
     M1_CASE_SUMMARY_LIMIT,
     M1_INITIATE_STAGES,
@@ -30,6 +31,7 @@ from _support import (
     M1_MARKETS,
     M1_NEGATIVE_CASE_KEYS,
     M1_NEGATIVE_TYPES,
+    M1_OPEN_RESULTS,
     M1_POSITIVE_CASE_KEYS,
     RepoTest,
     m1_readiness_problems,
@@ -50,6 +52,22 @@ STAGE_NUMBER = {case_id: number for number, (case_id, _) in enumerate(M1_INITIAT
 STAGE_KINDS = dict(M1_INITIATE_STAGES)
 SHEET_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 MISSING_NEGATIVES = ("M1-03-T3-missing-model", "M1-03-T5-missing-zip", "M1-03-CROSS-MISSING")
+DEVIATION_KEYS = ("requirement", "actual", "reason", "adjudication-ref")
+ARTIFACT_KEYS = {
+    "artifact-id",
+    "case-id",
+    "kind",
+    "path",
+    "sha256",
+    "bytes",
+    "generated-by",
+    "open-check",
+    "structural",
+    "meta",
+    "deviations",
+}
+OPEN_CHECK_KEYS = {"host", "at", "result"}
+STRUCTURAL_KEYS = {"type", "ok", "detail"}
 
 
 def load_slot() -> tuple[dict, dict]:
@@ -135,26 +153,57 @@ def _messages(record: dict) -> list[dict] | None:
     return messages if isinstance(messages, list) else None
 
 
-def _locate(locator: dict, files: list[dict]) -> tuple[dict | None, list[str]]:
-    matches = [record for record in files if record.get("session-id") == locator.get("session-id")]
-    if not matches:
-        return None, [f"locator session-id {locator.get('session-id')!r} is not in the supplied session files"]
-    messages = _messages(matches[0])
+def _locate_in(locator: dict, record: dict) -> tuple[dict | None, list[str]]:
+    """Locate one message inside a single original session-file snapshot."""
+    messages = _messages(record)
     if messages is None:
-        return None, ["session file has no messages list"]
+        return None, [f"session {record.get('session-id')!r} has no messages list"]
     index = locator.get("message-index")
-    if not isinstance(index, int) or index < 0 or index >= len(messages):
-        return None, [f"message-index {index!r} is out of range"]
+    if not isinstance(index, int) or isinstance(index, bool) or index < 0 or index >= len(messages):
+        return None, [
+            f"message-index {index!r} is out of range for session {record.get('session-id')!r} "
+            f"(snapshot has {len(messages)} messages)"
+        ]
     message = messages[index]
     if not isinstance(message, dict):
         return None, [f"message at index {index} is not an object"]
     if message.get("id") != locator.get("message-id"):
-        return None, [f"message-id does not match the message at index {index}"]
+        return None, [
+            f"message-id does not match the message at index {index} "
+            f"(found {message.get('id')!r}, expected {locator.get('message-id')!r})"
+        ]
     for key in ("id", "role", "at", "text"):
         if key not in message:
             return None, [f"message at index {index} is missing {key}"]
     return message, []
 
+
+def _locate(locator: dict, files: list[dict]) -> tuple[dict | None, list[str]]:
+    """Disambiguate equal session-ids by trying every supplied snapshot for index+id."""
+    matches = [record for record in files if record.get("session-id") == locator.get("session-id")]
+    if not matches:
+        return None, [f"locator session-id {locator.get('session-id')!r} is not in the supplied session files"]
+    for record in matches:
+        message, _ = _locate_in(locator, record)
+        if message is not None:
+            return message, []
+    return None, [
+        f"locator {locator.get('session-id')!r}/{locator.get('message-id')!r} at index "
+        f"{locator.get('message-index')!r} is not present in any supplied snapshot"
+    ]
+
+
+def _stage_message(record: dict, locator: object, label: str) -> tuple[dict | None, int | None, list[str]]:
+    """Request/completion must resolve inside this stage's own original session file."""
+    if not isinstance(locator, dict):
+        return None, None, [f"{label}: locator must be an object"]
+    problems = []
+    if locator.get("session-id") != record.get("session-id"):
+        problems.append(f"{label}: locator session-id must be this stage's original session id")
+    message, locate_problems = _locate_in(locator, record)
+    problems += locate_problems
+    index = locator.get("message-index") if message is not None else None
+    return message, (index if isinstance(index, int) else None), problems
 
 def _receipts(message: dict) -> list[tuple[str, str]]:
     raw = message.get("artifacts")
@@ -224,72 +273,76 @@ def stage_problems(slot: dict) -> list[str]:
         number = STAGE_NUMBER.get(case_id)
         if evidence.get("stage") != number:
             problems.append(f"{case_id}: stage-evidence.stage must be {number}")
-    files = list(sessions.values())
-    request_identities = set()
-    completion_times: dict[str, datetime.datetime] = {}
-    confirmation_identities: dict[str, tuple[str, str]] = {}
     ordered = [case_id for case_id, _ in M1_INITIATE_STAGES if case_id in sessions]
-    previous_completion: datetime.datetime | None = None
-    for case_id in ordered:
+    request_identities = set()
+    completions: dict[str, dict[str, object]] = {}
+    previous_completion_time: datetime.datetime | None = None
+    for position, case_id in enumerate(ordered):
         record = sessions[case_id]
         evidence = record.get("stage-evidence") if isinstance(record.get("stage-evidence"), dict) else {}
         number = STAGE_NUMBER[case_id]
         label = f"{case_id}.stage-evidence"
         problems += _locator_problems(evidence.get("request"), f"{label}.request")
         problems += _locator_problems(evidence.get("completion"), f"{label}.completion")
-        request, request_problems = _locate(evidence.get("request") or {}, files)
+        request_locator = evidence.get("request") if isinstance(evidence.get("request"), dict) else {}
+        completion_locator = evidence.get("completion") if isinstance(evidence.get("completion"), dict) else {}
+        request, request_index, request_problems = _stage_message(record, request_locator, f"{label}.request")
         problems += request_problems
-        completion, completion_problems = _locate(evidence.get("completion") or {}, files)
+        completion, completion_index, completion_problems = _stage_message(
+            record, completion_locator, f"{label}.completion"
+        )
         problems += completion_problems
+        request_time = None
+        completion_time = None
         if request is not None:
-            if evidence.get("request", {}).get("session-id") != record.get("session-id"):
-                problems.append(f"{case_id}: the request must be located in this stage's own session file")
             if request.get("role") != "user":
                 problems.append(f"{case_id}: the request must be a real user message")
             matches = [int(match) for match in REQUEST_RE.findall(str(request.get("text") or ""))]
             if matches != [number]:
                 problems.append(f"{case_id}: the request message must name exactly one stage: Task {number}")
-            identity = (evidence.get("request", {}).get("session-id"), request.get("id"))
+            identity = (request_locator.get("session-id"), request.get("id"))
             if identity in request_identities:
                 problems.append(f"{case_id}: the request message is not distinct from another stage")
             request_identities.add(identity)
             request_time, time_problems = _parse_time(request.get("at"), f"{case_id}.request.at")
             problems += time_problems
-        else:
-            request_time = None
         if completion is not None:
-            if evidence.get("completion", {}).get("session-id") != record.get("session-id"):
-                problems.append(f"{case_id}: the completion must be located in this stage's own session file")
             if completion.get("role") != "assistant":
                 problems.append(f"{case_id}: the completion must be an assistant message")
             completion_time, time_problems = _parse_time(completion.get("at"), f"{case_id}.completion.at")
             problems += time_problems
-            if completion_time is not None:
-                completion_times[case_id] = completion_time
             receipts = _receipts(completion)
-            expected = {(artifact.get("path"), artifact.get("sha256")) for artifact in artifacts if artifact.get("case-id") == case_id}
+            expected = {
+                (artifact.get("path"), artifact.get("sha256"))
+                for artifact in artifacts
+                if artifact.get("case-id") == case_id
+            }
             if set(receipts) != expected:
                 problems.append(f"{case_id}: the completion receipt must equal this stage's artifacts")
             if request_time is not None and completion_time is not None and not completion_time > request_time:
                 problems.append(f"{case_id}: the completion must follow the request")
-            if (
-                request is not None
-                and evidence.get("request", {}).get("session-id") == record.get("session-id")
-                and evidence.get("completion", {}).get("session-id") == record.get("session-id")
-                and isinstance(evidence.get("completion", {}).get("message-index"), int)
-                and isinstance(evidence.get("request", {}).get("message-index"), int)
-                and evidence.get("completion", {}).get("message-index") <= evidence.get("request", {}).get("message-index")
-            ):
+            if request_index is not None and completion_index is not None and completion_index <= request_index:
                 problems.append(f"{case_id}: the completion message index must follow the request")
-            if previous_completion is not None and completion_time is not None and not completion_time > previous_completion:
+            if previous_completion_time is not None and completion_time is not None and not completion_time > previous_completion_time:
                 problems.append(f"{case_id}: stage completion times must increase")
+        completions[case_id] = {
+            "time": completion_time,
+            "index": completion_index,
+            "session-id": completion_locator.get("session-id"),
+        }
         confirmation = evidence.get("previous-confirmation")
         if number == 1:
             if confirmation is not None:
                 problems.append(f"{case_id}: Task 1 must not carry a previous confirmation")
         else:
             problems += _locator_problems(confirmation, f"{label}.previous-confirmation")
-            message, confirmation_problems = _locate(confirmation or {}, files)
+            confirmation_locator = confirmation if isinstance(confirmation, dict) else {}
+            candidates = [record]
+            if position > 0:
+                previous_record = sessions.get(ordered[position - 1])
+                if previous_record is not None and previous_record is not record:
+                    candidates.append(previous_record)
+            message, confirmation_problems = _locate(confirmation_locator, candidates)
             problems += confirmation_problems
             if message is not None:
                 if message.get("role") != "user":
@@ -297,25 +350,35 @@ def stage_problems(slot: dict) -> list[str]:
                 matches = [int(match) for match in CONFIRM_RE.findall(str(message.get("text") or ""))]
                 if matches != [number - 1]:
                     problems.append(f"{case_id}: the previous confirmation must confirm Task {number - 1}")
-                if (confirmation or {}).get("message-id") == (evidence.get("request") or {}).get("message-id") and (
-                    confirmation or {}
-                ).get("session-id") == (evidence.get("request") or {}).get("session-id"):
+                if confirmation_locator.get("message-id") == request_locator.get("message-id") and confirmation_locator.get(
+                    "session-id"
+                ) == request_locator.get("session-id"):
                     problems.append(f"{case_id}: the confirmation and the request cannot be the same message")
                 confirmation_time, time_problems = _parse_time(message.get("at"), f"{case_id}.confirmation.at")
                 problems += time_problems
                 if request_time is not None and confirmation_time is not None and not confirmation_time < request_time:
                     problems.append(f"{case_id}: the confirmation must precede the current request")
-                position = ordered.index(case_id)
-                previous = ordered[position - 1] if position > 0 else None
-                if previous and previous in completion_times:
-                    if confirmation_time is not None and not confirmation_time > completion_times[previous]:
+                previous = completions.get(ordered[position - 1]) if position > 0 else None
+                if previous and previous.get("time") is not None and confirmation_time is not None:
+                    if not confirmation_time > previous["time"]:
                         problems.append(f"{case_id}: the confirmation must follow the previous completion")
-                confirmation_identities[case_id] = (
-                    (confirmation or {}).get("session-id"),
-                    (confirmation or {}).get("message-id"),
-                )
-        if completion_times.get(case_id) is not None:
-            previous_completion = completion_times[case_id]
+                if (
+                    previous
+                    and previous.get("session-id")
+                    and previous.get("session-id")
+                    == confirmation_locator.get("session-id")
+                    == request_locator.get("session-id")
+                    and isinstance(previous.get("index"), int)
+                    and isinstance(confirmation_locator.get("message-index"), int)
+                    and request_index is not None
+                    and not (previous["index"] < confirmation_locator["message-index"] < request_index)
+                ):
+                    problems.append(
+                        f"{case_id}: the previous completion, confirmation and request must keep their "
+                        "message-index order inside the shared session"
+                    )
+        if completions[case_id]["time"] is not None:
+            previous_completion_time = completions[case_id]["time"]
     if passed:
         collected = []
         for case_id, _ in M1_INITIATE_STAGES:
@@ -335,8 +398,9 @@ def stage_problems(slot: dict) -> list[str]:
                 problems.append("collected-at must strictly increase across the five stages")
     return problems
 
-
-def cross_session_problems(record: dict, stage_artifacts: dict[str, list[dict]]) -> list[str]:
+def cross_session_problems(
+    record: dict, stage_artifacts: dict[str, list[dict]], require_success: bool = True
+) -> list[str]:
     """Cross-session re-entry: only Task 2..5, all previous artifacts supplied."""
     if not isinstance(record, dict):
         return ["cross-session record must be an object"]
@@ -357,7 +421,7 @@ def cross_session_problems(record: dict, stage_artifacts: dict[str, list[dict]])
         problems.append(f"cross-session keys not allowed: {extra}")
     if missing:
         problems.append(f"cross-session keys missing: {missing}")
-    for key in ("reentry-id", "confirmation"):
+    for key in ("reentry-id", "confirmation", "result"):
         if not str(record.get(key) or "").strip():
             problems.append(f"cross-session.{key} is required")
     stage_located = str(record.get("stage-located") or "")
@@ -408,10 +472,9 @@ def cross_session_problems(record: dict, stage_artifacts: dict[str, list[dict]])
             problems.append("cross-session.final-artifact: M1-03-T5 DOCX is not registered")
         elif (final_path.relative_to(_support.ROOT).as_posix(), final_digest) != (docx[0].get("path"), docx[0].get("sha256")):
             problems.append("cross-session.final-artifact must be the M1-03-T5 DOCX")
-    if record.get("result") != "通过":
+    if require_success and record.get("result") != "通过":
         problems.append("cross-session.result must be 通过")
     return problems
-
 
 def tool_record_problems(artifact: dict) -> list[str]:
     """AC-06 per-stage routing: T2 new table, T3 update of the same model."""
@@ -524,6 +587,70 @@ def _case_problems(case: dict, keys: tuple[str, ...]) -> list[str]:
     return problems
 
 
+def artifact_keys_problems(artifact: dict) -> list[str]:
+    """TASK-01 §6 whitelist: exact keys, kind enum and enumerated sub-records."""
+    if not isinstance(artifact, dict):
+        return ["artifact must be an object"]
+    label = artifact.get("artifact-id") or "<artifact>"
+    problems = []
+    extra = sorted(set(artifact) - ARTIFACT_KEYS)
+    missing = sorted(ARTIFACT_KEYS - set(artifact))
+    if extra:
+        problems.append(f"artifact {label!r}: keys not allowed: {extra}")
+    if missing:
+        problems.append(f"artifact {label!r}: keys missing: {missing}")
+    if artifact.get("kind") not in M1_ARTIFACT_KINDS:
+        problems.append(f"artifact {label!r}: kind is not allowed: {artifact.get('kind')!r}")
+    if not isinstance(artifact.get("meta"), dict):
+        problems.append(f"artifact {label!r}: meta must be an object")
+    structural = artifact.get("structural")
+    if not isinstance(structural, dict):
+        problems.append(f"artifact {label!r}: structural must be an object")
+    else:
+        extra = sorted(set(structural) - STRUCTURAL_KEYS)
+        missing = sorted(STRUCTURAL_KEYS - set(structural))
+        if extra:
+            problems.append(f"artifact {label!r}: structural keys not allowed: {extra}")
+        if missing:
+            problems.append(f"artifact {label!r}: structural keys missing: {missing}")
+        if not isinstance(structural.get("ok"), bool):
+            problems.append(f"artifact {label!r}: structural.ok must be boolean")
+        if not isinstance(structural.get("detail"), str):
+            problems.append(f"artifact {label!r}: structural.detail must be a string")
+    open_check = artifact.get("open-check")
+    if not isinstance(open_check, dict):
+        problems.append(f"artifact {label!r}: open-check must be an object")
+    else:
+        extra = sorted(set(open_check) - OPEN_CHECK_KEYS)
+        missing = sorted(OPEN_CHECK_KEYS - set(open_check))
+        if extra:
+            problems.append(f"artifact {label!r}: open-check keys not allowed: {extra}")
+        if missing:
+            problems.append(f"artifact {label!r}: open-check keys missing: {missing}")
+        for key in ("host", "at"):
+            if not str(open_check.get(key) or "").strip():
+                problems.append(f"artifact {label!r}: open-check.{key} is required")
+        if open_check.get("result") not in M1_OPEN_RESULTS:
+            problems.append(f"artifact {label!r}: open-check.result is not allowed")
+    deviations = artifact.get("deviations")
+    if not isinstance(deviations, list):
+        problems.append(f"artifact {label!r}: deviations must be a list")
+    else:
+        for index, deviation in enumerate(deviations):
+            if not isinstance(deviation, dict):
+                problems.append(f"artifact {label!r}: deviations[{index}] must be an object")
+                continue
+            extra = sorted(set(deviation) - set(DEVIATION_KEYS))
+            missing = sorted(set(DEVIATION_KEYS) - set(deviation))
+            if extra:
+                problems.append(f"artifact {label!r}: deviations[{index}] keys not allowed: {extra}")
+            if missing:
+                problems.append(f"artifact {label!r}: deviations[{index}] keys missing: {missing}")
+            for key in DEVIATION_KEYS:
+                if not str(deviation.get(key) or "").strip():
+                    problems.append(f"artifact {label!r}: deviations[{index}].{key} is required")
+    return problems
+
 def slot_evidence_problems(slot: dict, block: dict) -> list[str]:
     passed = slot.get("research-state") == "通过"
     problems = []
@@ -575,6 +702,7 @@ def slot_evidence_problems(slot: dict, block: dict) -> list[str]:
                 problems.append(f"artifact {artifact_id!r}: sha256 does not match")
             if artifact.get("bytes") != path.stat().st_size:
                 problems.append(f"artifact {artifact_id!r}: bytes does not match")
+        problems += artifact_keys_problems(artifact)
         problems += _structure_problems(artifact)
         problems += tool_record_problems(artifact)
         open_check = artifact.get("open-check") if isinstance(artifact.get("open-check"), dict) else {}
@@ -585,6 +713,11 @@ def slot_evidence_problems(slot: dict, block: dict) -> list[str]:
                 if not isinstance(deviation, dict) or not str(deviation.get(key) or "").strip():
                     problems.append(f"artifact {artifact_id!r}: deviations[{index}].{key} is required")
     problems += stage_problems(slot)
+    record = slot.get("cross-session")
+    if record is not None:
+        problems += cross_session_problems(record, stage_artifacts, passed)
+    elif passed:
+        problems.append(f"{SLOT_ID}: cross-session record is required once the slot is 通过")
     if passed:
         languages = {case.get("language") for case in slot.get("positive-cases") or []}
         for language in M1_LANGUAGES:
@@ -602,11 +735,6 @@ def slot_evidence_problems(slot: dict, block: dict) -> list[str]:
                 problems.append(f"{case_id}: expected/actual are required")
             if any(artifact.get("case-id") == case_id for artifact in slot.get("artifacts") or []):
                 problems.append(f"{case_id}: no placeholder artifact may be registered for a missing-prerequisite case")
-        record = slot.get("cross-session")
-        if record is None:
-            problems.append(f"{SLOT_ID}: cross-session record is required once the slot is 通过")
-        else:
-            problems += cross_session_problems(record, stage_artifacts)
         problems += m1_readiness_problems(block, "collect")
     return problems
 
@@ -859,6 +987,266 @@ class SyntheticChecks(unittest.TestCase):
                 ),
                 [],
             )
+
+
+    def test_same_session_snapshots_and_confirmation_order(self) -> None:
+        with temp_root() as root:
+            fixture = self._same_session_fixture(root)
+            slot = fixture["slot"]
+            self.assertEqual(stage_problems(slot), [])
+            messages = fixture["messages"]
+            record = json.loads(
+                (root / "out" / "evidence" / "m1" / "sessions" / "M1-03-T2.json").read_text(encoding="utf-8")
+            )
+            rogue = {
+                "id": "rogue-confirmation",
+                "role": "user",
+                "at": "2026-10-17T09:40:00+08:00",
+                "text": "确认 Task 1",
+            }
+            variant = {
+                "session-id": "sess-main",
+                "messages": messages[:5] + [rogue],
+                "stage-evidence": {**record["stage-evidence"]},
+            }
+            variant["stage-evidence"]["previous-confirmation"] = {
+                "session-id": "sess-main",
+                "message-id": "rogue-confirmation",
+                "message-index": 5,
+            }
+            path = root / "out" / "evidence" / "m1" / "sessions" / "M1-03-T2-rogue.json"
+            path.write_text(json.dumps(variant, ensure_ascii=False), encoding="utf-8")
+            slot = json.loads(json.dumps(fixture["slot"]))
+            slot["positive-cases"][1]["session-record"] = (
+                f"{path.relative_to(root).as_posix()}::{sha256_file(path)}"
+            )
+            problems = stage_problems(slot)
+            self.assertTrue(problems)
+            self.assertTrue(any("message-index order" in problem for problem in problems), problems)
+
+    def test_cross_session_validation_outside_pass(self) -> None:
+        with temp_root() as root:
+            docx = self._write_docx(root, "out/evidence/m1/artifacts/M1-03-T5/final.docx")
+            docx_ref = f"out/evidence/m1/artifacts/M1-03-T5/final.docx::{sha256_file(docx)}"
+            messages = [
+                {"id": "conf-4", "role": "user", "at": "2026-10-17T09:00:00+08:00", "text": "确认 Task 4"},
+                {
+                    "id": "req-5",
+                    "role": "user",
+                    "at": "2026-10-17T09:10:00+08:00",
+                    "text": "请求执行: Task 5\n请只执行本阶段。",
+                },
+                {
+                    "id": "comp-5",
+                    "role": "assistant",
+                    "at": "2026-10-17T09:15:00+08:00",
+                    "text": "done",
+                    "artifacts": [
+                        {"path": "out/evidence/m1/artifacts/M1-03-T5/final.docx", "sha256": sha256_file(docx)}
+                    ],
+                },
+            ]
+            session = {
+                "session-id": "sess-cross",
+                "messages": messages,
+                "stage-evidence": {
+                    "case-id": "M1-03-T5",
+                    "stage": 5,
+                    "request": {"session-id": "sess-cross", "message-id": "req-5", "message-index": 1},
+                    "completion": {"session-id": "sess-cross", "message-id": "comp-5", "message-index": 2},
+                    "previous-confirmation": {
+                        "session-id": "sess-cross",
+                        "message-id": "conf-4",
+                        "message-index": 0,
+                    },
+                },
+            }
+            session_path = root / "out" / "evidence" / "m1" / "sessions" / "M1-03-T5.json"
+            session_path.parent.mkdir(parents=True, exist_ok=True)
+            session_path.write_text(json.dumps(session, ensure_ascii=False), encoding="utf-8")
+            artifact = {
+                "artifact-id": "M1-03-T5-DOCX",
+                "case-id": "M1-03-T5",
+                "kind": "DOCX",
+                "path": "out/evidence/m1/artifacts/M1-03-T5/final.docx",
+                "sha256": sha256_file(docx),
+                "bytes": docx.stat().st_size,
+                "generated-by": "tencent-docx|1.0|tencent-docx",
+                "open-check": {"host": "workbuddy", "at": "2026-10-17T10:10:00+08:00", "result": "成功"},
+                "structural": {"type": "docx", "ok": True, "detail": ""},
+                "meta": {"schema-query": "docx.create", "tool-result": "成功"},
+                "deviations": [],
+            }
+            record = {
+                "reentry-id": "R1",
+                "exit-at": "2026-10-17T10:00:00+08:00",
+                "reentry-at": "2026-10-17T11:00:00+08:00",
+                "provided-artifacts": [docx_ref],
+                "stage-located": "Task 5",
+                "confirmation": "用户确认从 Task 5 继续",
+                "final-artifact": docx_ref,
+                "result": "待测",
+            }
+            slot = {
+                "slot": "M1-03",
+                "research-state": "待测",
+                "positive-cases": [
+                    {
+                        "case-id": "M1-03-T5",
+                        "language": "zh-CN",
+                        "market": "A股",
+                        "input-summary": "摘要",
+                        "response-summary": "摘要",
+                        "session-record": (
+                            f"out/evidence/m1/sessions/M1-03-T5.json::{sha256_file(session_path)}"
+                        ),
+                        "client-version": "v",
+                        "tool-version": "v",
+                        "collected-at": "2026-10-17T09:20:00+08:00",
+                        "expected": "Task 5",
+                        "actual": "ok",
+                        "result": "通过",
+                    }
+                ],
+                "negative-cases": [],
+                "artifacts": [artifact],
+                "cross-session": record,
+            }
+            self.assertEqual(slot_evidence_problems(slot, {}), [])
+            self.assertEqual(slot_evidence_problems({**slot, "cross-session": None}, {}), [])
+            missing_key = {key: value for key, value in record.items() if key != "confirmation"}
+            self.assertTrue(slot_evidence_problems({**slot, "cross-session": missing_key}, {}))
+            bad_hash = {**record, "provided-artifacts": [docx_ref.rsplit("::", 1)[0] + "::" + "b" * 64]}
+            self.assertTrue(slot_evidence_problems({**slot, "cross-session": bad_hash}, {}))
+            dangling = {
+                **record,
+                "provided-artifacts": ["out/evidence/m1/artifacts/M1-03-T5/missing.docx::" + "c" * 64],
+            }
+            self.assertTrue(slot_evidence_problems({**slot, "cross-session": dangling}, {}))
+            extra_key = {**record, "prompt": "逐字输入"}
+            self.assertTrue(slot_evidence_problems({**slot, "cross-session": extra_key}, {}))
+            self.assertTrue(slot_evidence_problems({**slot, "artifacts": [{**artifact, "response": "逐字响应"}]}, {}))
+
+    def _write_docx(self, root: Path, rel_path: str) -> Path:
+        path = root / rel_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr(
+                "word/document.xml",
+                '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                "<w:body/></w:document>",
+            )
+        return path
+
+    def _write_xlsx(self, root: Path, rel_path: str) -> Path:
+        path = root / rel_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        workbook = (
+            '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheets/></workbook>'
+        )
+        sheet = (
+            f'<worksheet xmlns="{SHEET_NS.strip("{}")}"><sheetData><row><c><f>SUM(A1:A2)</f></c>'
+            "</row></sheetData></worksheet>"
+        )
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr("xl/workbook.xml", workbook)
+            archive.writestr("xl/worksheets/sheet1.xml", sheet)
+        return path
+
+    def _same_session_fixture(self, root: Path) -> dict:
+        start = datetime.datetime(2026, 10, 17, 9, 0, tzinfo=datetime.timezone(datetime.timedelta(hours=8)))
+        slot = {"research-state": "通过", "positive-cases": [], "negative-cases": [], "artifacts": []}
+        messages: list[dict] = []
+        confirmation = None
+        for number, (case_id, kinds) in enumerate(M1_INITIATE_STAGES, start=1):
+            artifacts = []
+            for kind in kinds:
+                suffix = {"REPORT": "report.md", "XLSX": "model.xlsx", "ZIP": "charts.zip", "DOCX": "final.docx"}[kind]
+                path = root / "out" / "evidence" / "m1" / "artifacts" / case_id / suffix
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(f"{case_id}-{kind}".encode("utf-8"))
+                artifacts.append(
+                    {
+                        "artifact-id": f"{case_id}-{kind}",
+                        "case-id": case_id,
+                        "kind": kind,
+                        "path": path.relative_to(root).as_posix(),
+                        "sha256": sha256_file(path),
+                        "bytes": path.stat().st_size,
+                    }
+                )
+            request_index = len(messages)
+            messages.append(
+                {
+                    "id": f"req-{number}",
+                    "role": "user",
+                    "at": (start + datetime.timedelta(minutes=30 * number)).isoformat(),
+                    "text": f"请求执行: Task {number}\n请只执行本阶段。",
+                }
+            )
+            completion_index = len(messages)
+            messages.append(
+                {
+                    "id": f"comp-{number}",
+                    "role": "assistant",
+                    "at": (start + datetime.timedelta(minutes=30 * number + 5)).isoformat(),
+                    "text": "done",
+                    "artifacts": [{"path": item["path"], "sha256": item["sha256"]} for item in artifacts],
+                }
+            )
+            current_confirmation = confirmation
+            confirmation = None
+            if number < len(M1_INITIATE_STAGES):
+                confirmation_index = len(messages)
+                messages.append(
+                    {
+                        "id": f"conf-{number}",
+                        "role": "user",
+                        "at": (start + datetime.timedelta(minutes=30 * number + 10)).isoformat(),
+                        "text": f"确认 Task {number}",
+                    }
+                )
+                confirmation = {
+                    "session-id": "sess-main",
+                    "message-id": f"conf-{number}",
+                    "message-index": confirmation_index,
+                }
+            record = {
+                "session-id": "sess-main",
+                "messages": json.loads(json.dumps(messages)),
+                "stage-evidence": {
+                    "case-id": case_id,
+                    "stage": number,
+                    "request": {"session-id": "sess-main", "message-id": f"req-{number}", "message-index": request_index},
+                    "completion": {
+                        "session-id": "sess-main",
+                        "message-id": f"comp-{number}",
+                        "message-index": completion_index,
+                    },
+                    "previous-confirmation": current_confirmation,
+                },
+            }
+            path = root / "out" / "evidence" / "m1" / "sessions" / f"{case_id}.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+            slot["positive-cases"].append(
+                {
+                    "case-id": case_id,
+                    "language": "zh-CN",
+                    "market": "A股",
+                    "input-summary": "摘要",
+                    "response-summary": "摘要",
+                    "session-record": f"{path.relative_to(root).as_posix()}::{sha256_file(path)}",
+                    "client-version": "v",
+                    "tool-version": "v",
+                    "collected-at": (start + datetime.timedelta(minutes=30 * number + 12)).isoformat(),
+                    "expected": f"Task {number}",
+                    "actual": "ok",
+                    "result": "通过",
+                }
+            )
+            slot["artifacts"].extend(artifacts)
+        return {"slot": slot, "messages": messages}
 
 
 class RepositoryChecks(RepoTest):

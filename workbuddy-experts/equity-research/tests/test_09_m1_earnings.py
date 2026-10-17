@@ -20,6 +20,7 @@ from pathlib import Path
 import _support
 from _support import (
     ACCEPTANCE,
+    M1_ARTIFACT_KINDS,
     M1_BLOCK,
     M1_CASE_SUMMARY_LIMIT,
     M1_EARNINGS_CHECKLIST_SIZE,
@@ -27,6 +28,7 @@ from _support import (
     M1_MARKETS,
     M1_NEGATIVE_CASE_KEYS,
     M1_NEGATIVE_TYPES,
+    M1_OPEN_RESULTS,
     M1_POSITIVE_CASE_KEYS,
     RepoTest,
     m1_readiness_problems,
@@ -41,6 +43,21 @@ from _support import (
 SLOT_ID = "M1-01"
 CHECKLIST_RESULTS = ("通过", "不通过", "不适用")
 DEVIATION_KEYS = ("requirement", "actual", "reason", "adjudication-ref")
+ARTIFACT_KEYS = {
+    "artifact-id",
+    "case-id",
+    "kind",
+    "path",
+    "sha256",
+    "bytes",
+    "generated-by",
+    "open-check",
+    "structural",
+    "meta",
+    "deviations",
+}
+OPEN_CHECK_KEYS = {"host", "at", "result"}
+STRUCTURAL_KEYS = {"type", "ok", "detail"}
 
 
 def load_slot() -> tuple[dict, dict]:
@@ -135,6 +152,71 @@ def _cjk_problems(path: Path) -> list[str]:
     return []
 
 
+def artifact_keys_problems(artifact: dict) -> list[str]:
+    """TASK-01 §6 whitelist: exact keys, kind enum and enumerated sub-records."""
+    if not isinstance(artifact, dict):
+        return ["artifact must be an object"]
+    label = artifact.get("artifact-id") or "<artifact>"
+    problems = []
+    extra = sorted(set(artifact) - ARTIFACT_KEYS)
+    missing = sorted(ARTIFACT_KEYS - set(artifact))
+    if extra:
+        problems.append(f"artifact {label!r}: keys not allowed: {extra}")
+    if missing:
+        problems.append(f"artifact {label!r}: keys missing: {missing}")
+    if artifact.get("kind") not in M1_ARTIFACT_KINDS:
+        problems.append(f"artifact {label!r}: kind is not allowed: {artifact.get('kind')!r}")
+    if not isinstance(artifact.get("meta"), dict):
+        problems.append(f"artifact {label!r}: meta must be an object")
+    structural = artifact.get("structural")
+    if not isinstance(structural, dict):
+        problems.append(f"artifact {label!r}: structural must be an object")
+    else:
+        extra = sorted(set(structural) - STRUCTURAL_KEYS)
+        missing = sorted(STRUCTURAL_KEYS - set(structural))
+        if extra:
+            problems.append(f"artifact {label!r}: structural keys not allowed: {extra}")
+        if missing:
+            problems.append(f"artifact {label!r}: structural keys missing: {missing}")
+        if not isinstance(structural.get("ok"), bool):
+            problems.append(f"artifact {label!r}: structural.ok must be boolean")
+        if not isinstance(structural.get("detail"), str):
+            problems.append(f"artifact {label!r}: structural.detail must be a string")
+    open_check = artifact.get("open-check")
+    if not isinstance(open_check, dict):
+        problems.append(f"artifact {label!r}: open-check must be an object")
+    else:
+        extra = sorted(set(open_check) - OPEN_CHECK_KEYS)
+        missing = sorted(OPEN_CHECK_KEYS - set(open_check))
+        if extra:
+            problems.append(f"artifact {label!r}: open-check keys not allowed: {extra}")
+        if missing:
+            problems.append(f"artifact {label!r}: open-check keys missing: {missing}")
+        for key in ("host", "at"):
+            if not str(open_check.get(key) or "").strip():
+                problems.append(f"artifact {label!r}: open-check.{key} is required")
+        if open_check.get("result") not in M1_OPEN_RESULTS:
+            problems.append(f"artifact {label!r}: open-check.result is not allowed")
+    deviations = artifact.get("deviations")
+    if not isinstance(deviations, list):
+        problems.append(f"artifact {label!r}: deviations must be a list")
+    else:
+        for index, deviation in enumerate(deviations):
+            if not isinstance(deviation, dict):
+                problems.append(f"artifact {label!r}: deviations[{index}] must be an object")
+                continue
+            extra = sorted(set(deviation) - set(DEVIATION_KEYS))
+            missing = sorted(set(DEVIATION_KEYS) - set(deviation))
+            if extra:
+                problems.append(f"artifact {label!r}: deviations[{index}] keys not allowed: {extra}")
+            if missing:
+                problems.append(f"artifact {label!r}: deviations[{index}] keys missing: {missing}")
+            for key in DEVIATION_KEYS:
+                if not str(deviation.get(key) or "").strip():
+                    problems.append(f"artifact {label!r}: deviations[{index}].{key} is required")
+    return problems
+
+
 def structure_problems(artifact: dict) -> list[str]:
     """DOCX/Summary structure pre-trial (stdlib zipfile + ElementTree only)."""
     if not isinstance(artifact, dict):
@@ -167,6 +249,9 @@ def structure_problems(artifact: dict) -> list[str]:
         meta = artifact.get("meta") if isinstance(artifact.get("meta"), dict) else {}
         for key in ("pages", "figures", "summary-tables"):
             problems += _int_problem(meta, key)
+        figures = meta.get("figures")
+        if isinstance(figures, int) and not isinstance(figures, bool) and figures < 1:
+            problems.append("DOCX meta.figures must be at least 1: a deviation cannot waive a figure-free DOCX")
     else:
         if structural.get("type") != "markdown" or structural.get("ok") is not True:
             problems.append("SUMMARY structural.type/ok must be markdown/true")
@@ -179,9 +264,19 @@ def deviation_problems(artifact: dict) -> list[str]:
     """Every anchor violation needs an adjudicated deviation, not a silent waiver."""
     meta = artifact.get("meta") if isinstance(artifact.get("meta"), dict) else {}
     violations = anchor_violations(meta) if artifact.get("kind") == "DOCX" else []
-    if not violations:
-        return []
     problems = []
+    figures = meta.get("figures")
+    if (
+        artifact.get("kind") == "DOCX"
+        and isinstance(figures, int)
+        and not isinstance(figures, bool)
+        and figures < 1
+    ):
+        problems.append(
+            f"artifact {artifact.get('artifact-id')!r}: DOCX must carry at least one figure; a deviation cannot waive it"
+        )
+    if not violations:
+        return problems
     deviations = [d for d in artifact.get("deviations") or [] if isinstance(d, dict)]
     for violation in violations:
         if not any(violation in str(deviation.get("requirement") or "") for deviation in deviations):
@@ -269,6 +364,7 @@ def slot_evidence_problems(slot: dict) -> list[str]:
                 problems.append(f"artifact {artifact_id!r}: sha256 does not match")
             if artifact.get("bytes") != path.stat().st_size:
                 problems.append(f"artifact {artifact_id!r}: bytes does not match")
+        problems += artifact_keys_problems(artifact)
         problems += structure_problems(artifact)
         problems += tool_record_problems(artifact)
         problems += deviation_problems(artifact)
@@ -331,6 +427,63 @@ class SyntheticChecks(unittest.TestCase):
             summary = {**payload, "kind": "SUMMARY", "generated-by": "host|1|host-preview", "meta": {"schema-query": "md", "tool-result": "成功"}}
             self.assertEqual(tool_record_problems(summary), [])
             self.assertTrue(tool_record_problems({**summary, "generated-by": "host|1|matplotlib-fallback"}))
+
+
+    def test_artifact_whitelist_and_figure_floor(self) -> None:
+        with temp_root() as root:
+            path = root / "out" / "evidence" / "m1" / "artifacts" / "case" / "茅台业绩点评.docx"
+            path.parent.mkdir(parents=True)
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr(
+                    "word/document.xml",
+                    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                    "<w:body/></w:document>",
+                )
+            artifact = {
+                "artifact-id": "M1-01-A1",
+                "case-id": "M1-01-P1",
+                "kind": "DOCX",
+                "path": "out/evidence/m1/artifacts/case/茅台业绩点评.docx",
+                "sha256": sha256_file(path),
+                "bytes": path.stat().st_size,
+                "generated-by": "tencent-docx|1.2.0|tencent-docx",
+                "open-check": {"host": "workbuddy", "at": "2026-10-17T10:00:00+08:00", "result": "成功"},
+                "structural": {"type": "docx", "ok": True, "detail": ""},
+                "meta": {
+                    "schema-query": "docx.create",
+                    "tool-result": "成功",
+                    "pages": 9,
+                    "figures": 8,
+                    "summary-tables": 2,
+                },
+                "deviations": [],
+            }
+            self.assertEqual(artifact_keys_problems(artifact), [])
+            self.assertEqual(structure_problems(artifact), [])
+            self.assertTrue(artifact_keys_problems({**artifact, "prompt": "逐字输入"}))
+            self.assertTrue(artifact_keys_problems({**artifact, "kind": "SHEET"}))
+            self.assertTrue(
+                artifact_keys_problems({key: value for key, value in artifact.items() if key != "generated-by"})
+            )
+            self.assertTrue(artifact_keys_problems({**artifact, "structural": {"type": "docx", "ok": True}}))
+            self.assertTrue(
+                artifact_keys_problems({**artifact, "open-check": {**artifact["open-check"], "host": ""}})
+            )
+            self.assertTrue(
+                artifact_keys_problems(
+                    {**artifact, "deviations": [{"requirement": "r", "actual": "a", "reason": "why"}]}
+                )
+            )
+            deviation = {
+                "requirement": "figures",
+                "actual": "0",
+                "reason": "模板限制",
+                "adjudication-ref": "out/evidence/m1/adjudications/a.json::" + "a" * 64,
+            }
+            for figures in (0, -1):
+                waived = {**artifact, "meta": {**artifact["meta"], "figures": figures}, "deviations": [deviation]}
+                self.assertTrue(structure_problems(waived), f"figures={figures} must be rejected")
+                self.assertTrue(deviation_problems(waived), f"a deviation must not waive figures={figures}")
 
 
 class RepositoryChecks(RepoTest):
