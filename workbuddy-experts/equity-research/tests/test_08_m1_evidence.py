@@ -460,6 +460,11 @@ def replay_problems(slot: dict) -> list[str]:
     return problems
 
 
+def _path_matches(path: str, approved: str) -> bool:
+    """Only an approved directory (trailing slash) includes descendant paths."""
+    return path.startswith(approved) if approved.endswith("/") else path == approved
+
+
 def _path_list_problems(value: object, label: str, prefixes: tuple[str, ...], allow_empty: bool) -> list[str]:
     if not isinstance(value, list) or (not value and not allow_empty):
         return [f"{label} must be a non-empty list of repository paths"]
@@ -467,7 +472,7 @@ def _path_list_problems(value: object, label: str, prefixes: tuple[str, ...], al
     for index, path in enumerate(value):
         if not isinstance(path, str) or not path.strip():
             problems.append(f"{label}[{index}] must be a non-empty repository path")
-        elif not any(path == prefix or path.startswith(prefix) for prefix in prefixes):
+        elif not any(_path_matches(path, prefix) for prefix in prefixes):
             problems.append(f"{label}[{index}] is outside the approved conditional paths: {path!r}")
     return problems
 
@@ -1064,7 +1069,7 @@ def skills_for_path(path: str) -> set[str]:
         ("plugins/agent-plugins/earnings-reviewer/skills/earnings-analysis/", "earnings-analysis"),
         ("plugins/agent-plugins/earnings-reviewer/skills/model-update/", "model-update"),
     )
-    hits = {skill for prefix, skill in mapping if path == prefix or path.startswith(prefix)}
+    hits = {skill for prefix, skill in mapping if _path_matches(path, prefix)}
     if hits:
         return hits
     shared = (
@@ -1111,7 +1116,7 @@ def scope_problems(changed: list[str], block: dict) -> list[str]:
             continue
         if path in M1_SCOPE_EXACT_FILES:
             continue
-        if not any(path == prefix or path.startswith(prefix) for prefix in M1_SCOPE_CONDITIONAL_PREFIXES):
+        if not any(_path_matches(path, prefix) for prefix in M1_SCOPE_CONDITIONAL_PREFIXES):
             problems.append(f"{path}: outside the SDD §9 scope_in")
             continue
         skills = skills_for_path(path)
@@ -1690,6 +1695,39 @@ class ContractSelfChecks(unittest.TestCase):
             },
         }
         self.assertTrue(skill_change_problems(initiate, {}))
+
+    def test_conditional_file_paths_are_exact(self) -> None:
+        for slot_id, skill, command in (
+            ("M1-01", "earnings-analysis", "earnings"),
+            ("M1-02", "model-update", "model-update"),
+            ("M1-03", "initiating-coverage", "initiate"),
+        ):
+            exact = f"plugins/vertical-plugins/equity-research/commands/{command}.md"
+            child = f"plugins/vertical-plugins/equity-research/skills/{skill}/references/example.md"
+            for path, allowed in ((exact, True), (child, True), (exact + ".bak", False), (exact + "-extra", False)):
+                with self.subTest(path=path):
+                    case_id = f"{slot_id}-P1"
+                    slot = {
+                        "slot": slot_id,
+                        "skill": skill,
+                        "positive-cases": [{"case-id": case_id}],
+                        "negative-cases": [],
+                        "skill-change": {
+                            "changed": True,
+                            "case-id": case_id,
+                            "source-paths": [path],
+                            "copy-paths": [],
+                            "retested-cases": [case_id],
+                            "versions": {PLUGIN_MANIFESTS[0]: "0.11.1"},
+                            "wb-custom": "WB-CUSTOM-01",
+                        },
+                    }
+                    self.assertEqual(bool(skill_change_problems(slot, {})), not allowed)
+                    self.assertEqual(bool(scope_problems([path], {"slots": [slot]})), not allowed)
+                    self.assertEqual(skills_for_path(path), {skill} if allowed else set())
+                    self.assertEqual(
+                        bool(conditional_content_problems(path, "before", "after", {skill})), not allowed
+                    )
 
     def test_conditional_content_layer(self) -> None:
         before_plugin = json.dumps({"name": "pkg", "version": "0.11.0"}, indent=2) + "\n"

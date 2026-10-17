@@ -362,19 +362,27 @@ def stage_problems(slot: dict) -> list[str]:
                 if previous and previous.get("time") is not None and confirmation_time is not None:
                     if not confirmation_time > previous["time"]:
                         problems.append(f"{case_id}: the confirmation must follow the previous completion")
+                confirmation_index = confirmation_locator.get("message-index")
                 if (
                     previous
                     and previous.get("session-id")
-                    and previous.get("session-id")
-                    == confirmation_locator.get("session-id")
-                    == request_locator.get("session-id")
+                    and previous.get("session-id") == confirmation_locator.get("session-id")
                     and isinstance(previous.get("index"), int)
-                    and isinstance(confirmation_locator.get("message-index"), int)
-                    and request_index is not None
-                    and not (previous["index"] < confirmation_locator["message-index"] < request_index)
+                    and isinstance(confirmation_index, int)
+                    and not previous["index"] < confirmation_index
                 ):
                     problems.append(
-                        f"{case_id}: the previous completion, confirmation and request must keep their "
+                        f"{case_id}: the previous completion and confirmation must keep their "
+                        "message-index order inside the shared session"
+                    )
+                if (
+                    confirmation_locator.get("session-id") == request_locator.get("session-id")
+                    and isinstance(confirmation_index, int)
+                    and request_index is not None
+                    and not confirmation_index < request_index
+                ):
+                    problems.append(
+                        f"{case_id}: the confirmation and request must keep their "
                         "message-index order inside the shared session"
                     )
         if completions[case_id]["time"] is not None:
@@ -1023,6 +1031,43 @@ class SyntheticChecks(unittest.TestCase):
             problems = stage_problems(slot)
             self.assertTrue(problems)
             self.assertTrue(any("message-index order" in problem for problem in problems), problems)
+
+    def test_mixed_session_confirmation_order(self) -> None:
+        for confirmation_session in ("previous", "current"):
+            for wrong_order in (False, True):
+                with self.subTest(confirmation_session=confirmation_session, wrong_order=wrong_order), temp_root() as root:
+                    slot, sessions = self._fixture(root)
+                    previous = sessions["M1-03-T1"]
+                    current = sessions["M1-03-T2"]
+                    if confirmation_session == "previous":
+                        if wrong_order:
+                            # Valid timestamps and locators, but confirmation precedes completion in A.
+                            previous["messages"][1:3] = previous["messages"][2:0:-1]
+                            previous["stage-evidence"]["completion"]["message-index"] = 2
+                            current["stage-evidence"]["previous-confirmation"]["message-index"] = 1
+                    else:
+                        confirmation = previous["messages"].pop()
+                        confirmation["id"] = "confirm-1"
+                        # Completion is in A; confirmation and request are comparable inside B.
+                        index = 1 if wrong_order else 0
+                        current["messages"].insert(index, confirmation)
+                        current["stage-evidence"]["previous-confirmation"] = {
+                            "session-id": current["session-id"],
+                            "message-id": confirmation["id"],
+                            "message-index": index,
+                        }
+                        current["stage-evidence"]["request"]["message-index"] = 0 if wrong_order else 1
+                        current["stage-evidence"]["completion"]["message-index"] = 2
+                        sessions["M1-03-T3"]["stage-evidence"]["previous-confirmation"]["message-index"] = 3
+                    for case in slot["positive-cases"]:
+                        path = root / "out" / "evidence" / "m1" / "sessions" / f"{case['case-id']}.json"
+                        path.write_text(json.dumps(sessions[case["case-id"]], ensure_ascii=False), encoding="utf-8")
+                        case["session-record"] = f"{path.relative_to(root).as_posix()}::{sha256_file(path)}"
+                    problems = stage_problems(slot)
+                    if wrong_order:
+                        self.assertTrue(any("message-index order" in problem for problem in problems), problems)
+                    else:
+                        self.assertEqual(problems, [])
 
     def test_cross_session_validation_outside_pass(self) -> None:
         with temp_root() as root:
