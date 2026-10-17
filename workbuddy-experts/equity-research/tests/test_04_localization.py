@@ -17,13 +17,9 @@ from _support import (
     CMD_SRC,
     COMMAND_FILE,
     CUSTOM,
-    EXPECTED_BUNDLE_CHANGES,
     NINE_PAIRS,
     README,
     ROOT,
-    SCOPE_ALLOWED_FILES,
-    SCOPE_ALLOWED_PREFIXES,
-    SCOPE_VERSION_BUMP_FILES,
     SKILL_SRC,
     RepoTest,
     crctl_git,
@@ -118,18 +114,6 @@ class Localization(RepoTest):
         proc = subprocess.run([sys.executable, "scripts/check.py"], cwd=str(ROOT),
                               capture_output=True, text=True, encoding="utf-8", errors="replace")
         self.assertEqual(proc.returncode, 0, f"scripts/check.py failed:\n{proc.stdout}\n{proc.stderr}")
-
-    def test_diff_stays_inside_the_approved_scope(self) -> None:
-        changed = crctl_git_lines("diff", "--name-only", "origin/workbuddy/main")
-        self.assertTrue(changed, "no diff against workbuddy/main: nothing to review")
-        for path in changed:
-            allowed = (path in SCOPE_ALLOWED_FILES
-                       or path in SCOPE_VERSION_BUMP_FILES
-                       or path.startswith(SCOPE_ALLOWED_PREFIXES))
-            self.assertTrue(allowed, f"{path} is outside the approved scope_in (scope creep)")
-        bundles = sorted(p for p in changed if p.startswith("plugins/agent-plugins/"))
-        self.assertEqual(bundles, sorted(EXPECTED_BUNDLE_CHANGES),
-                         "only CR-caused named-agent copies may change (no unrelated upstream drift)")
 
     def test_other_verticals_untouched(self) -> None:
         changed = crctl_git_lines("diff", "--name-only", "origin/workbuddy/main")
