@@ -35,6 +35,7 @@ from test_09_query_traceability import (
     PRIVATE_WIN_PATH_RE,
     RECORD_REF_RE,
     SEVEN_DOMAINS,
+    _led_verdict,
     load_verify_records,
 )
 from test_10_safety_branches import check_agent, check_sbc01_02_independent
@@ -56,9 +57,57 @@ REF_RE = re.compile(r"\b(?:QRY|SRC|KJ|SBC|SMP|VR|LIC|LAT|CON|REP|RIN|ENV|DOM|TSK
 REQ_ID_RE = re.compile(r"\AREQ-\d{2}\Z")
 COVERAGE_RE = re.compile(r"\A(\d+)/(\d+)\Z")
 # G5 的两张附表不在 TASK-01 §6 的 TABLE_COLUMNS 注册面内（同 queries.md#核验记录对象的处理），列名在此定义。
-REQ_COLUMNS = ("ID", "来源映射行", "数据域", "市场与证券样本", "报告期间", "必需字段与口径",
-               "前序依赖", "关联证据行", "覆盖判定", "判定依据")
+# `CR1 原始必需数据` 逐字承载 CR1 required-data 元素，`机检必需字段` 把「必需字段与口径」绑定到
+# adopted 证据对象（B-CODE-02：四条件里的字段/口径必须参与判定，不能只看域与年份 token）。
+REQ_COLUMNS = ("ID", "来源映射行", "CR1 原始必需数据", "数据域", "市场与证券样本", "报告期间",
+               "必需字段与口径", "机检必需字段", "前序依赖", "关联证据行", "覆盖判定", "判定依据")
 DCL_RECHECK_COLUMNS = ("ID", "复验对象", "节点复现方式", "复现结果", "闭合结论")
+REQ_FIELD_BINDING_RE = re.compile(r"\A(QRY-\d{2}):(\S+)\Z")
+# 期段/口径 token：与证据对象期间文本比对前先归一（去空格与标点、统一小写），
+# 这样 `low PE` 与证据里的 `low_pe`、`2025年净利润` 与 `净利润` 可按同一口径比对。
+NON_TOKEN_RE = re.compile(r"[^0-9a-z一-鿿]")
+HALF_TOKENS = ("第一季度", "第二季度", "第三季度", "第四季度", "上半年", "下半年")
+SAMPLE_CODE_RE = re.compile(r"\b\d{6}\b")
+
+
+def _norm(text: str) -> str:
+    return NON_TOKEN_RE.sub("", text.lower())
+
+
+def cr1_items(mapping: list[dict]) -> list[str]:
+    """CR1 required-data 元素展开为扁平清单，顺序与 REQ-NN 相同（逐项绑定的唯一来源）。"""
+    return [str(i) for row in mapping for i in row["required-data"]]
+
+
+def _declared_field_bindings(cell: str) -> dict[str, list[str]]:
+    """解析 `机检必需字段`：`QRY-NN:term1、term2；QRY-NN2:term3`。"""
+    out: dict[str, list[str]] = {}
+    for part in cell.split("；"):
+        part = part.strip()
+        if not part:
+            continue
+        m = REQ_FIELD_BINDING_RE.match(part)
+        if not m:
+            raise AssertionError(f"机检必需字段 条目 {part!r} 非 `QRY-NN:term…` 形态")
+        terms = [t for t in re.split(r"[、,／/]", m.group(2))]
+        if not terms or any(not t.strip() for t in terms):
+            raise AssertionError(f"机检必需字段 条目 {part!r} 缺字段词元")
+        out[m.group(1)] = [t.strip() for t in terms]
+    return out
+
+
+def _evidence_field_text(q: dict, records: dict) -> str:
+    """一条 adopted QRY 的行与对象两侧证据文本（字段/口径比对的被检侧）。
+
+    默认只取「证据确实返回了什么」：行内返回字段/口径与对象的字段清单，请求条件不算返回。
+    唯一例外是筛选域——「筛选条件定义」这类要求，其证据就是请求条件本身（如 `preset=low_pe`）。
+    """
+    m = RECORD_REF_RE.search(q["证据对象引用"])
+    rec = records.get(m.group(1), {}) if m else {}
+    parts = [q["返回字段与结果状态"], q["口径"], str(rec.get("字段清单", ""))]
+    if q["数据域"] == "筛选":
+        parts.append(q["查询条件"])
+    return " ".join(parts)
 
 
 def local_table(heading: str, columns: tuple[str, ...], *, path: Path | None = None) -> list[dict[str, str]]:
@@ -164,9 +213,16 @@ def expected_reqs(mapping: list[dict]) -> dict[str, list[str]]:
 
 
 def _req_violations(row: dict, *, qry_by_id: dict, lic_by_id: dict, records: dict,
-                    machine: dict[str, bool]) -> list[str]:
-    """SDD §4.5 的四条件机检（覆盖不来自台账，来自对上游 QRY/LIC/VR/前序 REQ 的现算）。"""
+                    machine: dict[str, bool], order: list[str], items: list[str]) -> list[str]:
+    """SDD §4.5 的四条件机检（覆盖不来自台账，来自对上游 QRY/LIC/VR/前序 REQ 的现算）。
+
+    四条件逐条落到证据上：条件 1 对每条 adopted 证据核对「本机自用」用途 LIC=已确认；
+    条件 2 取证据对象自身的结果状态（不取台账 `是否最终采用源` 标签）；条件 3 核对象存在、
+    哈希可复核；条件 4 按市场/证券、准确期间、字段/口径与 CR1 前序依赖逐项比对。
+    """
     violations: list[str] = []
+    req_id = row["ID"]
+    idx = order.index(req_id) if req_id in order else -1
     refs = REF_RE.findall(row["关联证据行"])
     qrids = [r for r in refs if r.startswith("QRY-")]
     licids = [r for r in refs if r.startswith("LIC-")]
@@ -175,6 +231,7 @@ def _req_violations(row: dict, *, qry_by_id: dict, lic_by_id: dict, records: dic
     if not adopted:
         violations.append("本次实测成功行（关联 QRY 缺位或均未采用）")
     bound_vrids: set[str] = set()
+    rec_by_q: dict[str, dict] = {}
     for q in adopted:
         m = RECORD_REF_RE.search(q["证据对象引用"])
         if m is None:
@@ -189,34 +246,85 @@ def _req_violations(row: dict, *, qry_by_id: dict, lic_by_id: dict, records: dic
             violations.append(f"{q['ID']} 证据对象 {vrid} 哈希不匹配")
             continue
         bound_vrids.add(vrid)
+        rec_by_q[q["ID"]] = rec
+        # 条件 2：真实成功取对象自身的结果状态；失败或空结果不得签覆盖
+        verdict = _led_verdict(rec["结果状态"])
+        if verdict != "成功":
+            violations.append(f"{q['ID']} 证据对象 {vrid} 结果状态={verdict}，非本次实测成功")
+        if not str(rec.get("字段清单", "")).strip() or str(rec.get("字段清单", "")).strip() == "无":
+            violations.append(f"{q['ID']} 证据对象 {vrid} 无字段清单（无法核对字段/口径）")
     if vrids and not set(vrids) <= bound_vrids:
         violations.append(f"关联 VR 未绑定 adopted QRY：{sorted(set(vrids) - bound_vrids)}")
-    entries = {q["源"].split("（")[0].split("／")[0].strip() for q in adopted}
-    ok_lic = any(
-        lic_by_id.get(l, {}).get("状态") == "已确认" and lic_by_id[l].get("入口") in entries
-        for l in licids
-    )
-    if not ok_lic:
-        violations.append("对应用途 LIC=已确认（关联 LIC 与 adopted QRY 入口不匹配或未确认）")
-    for dep in re.findall(r"REQ-\d{2}", row["前序依赖"]):
-        if not machine.get(dep, False):
+    # 条件 1：逐条 adopted 证据核对「本机自用」用途 LIC=已确认（不是任一同入口许可）
+    for q in adopted:
+        entry = q["源"].split("（")[0].split("／")[0].strip()
+        ok_lic = any(
+            lic_by_id.get(l, {}).get("状态") == "已确认"
+            and lic_by_id[l].get("用途") == "本机自用"
+            and lic_by_id[l].get("入口") == entry
+            for l in licids
+        )
+        if not ok_lic:
+            violations.append(
+                f"{q['ID']}（入口 {entry}）在本行未关联到 状态=已确认∧用途=本机自用 的 LIC 行")
+    # 条件 4-a：前序依赖按 CR1 展开清单核对（存在、顺序在前、已成立、MR-02 Task 链完整）
+    deps = re.findall(r"REQ-\d{2}", row["前序依赖"])
+    for dep in deps:
+        if dep not in order:
+            violations.append(f"前序依赖 {dep} 不在 CR1 展开清单内")
+        elif order.index(dep) >= idx >= 0:
+            violations.append(f"前序依赖 {dep} 未排在本条之前（CR1 展开顺序）")
+        elif not machine.get(dep, False):
             violations.append(f"前序依赖 {dep} 未成立")
+    item = items[idx] if 0 <= idx < len(items) else ""
+    m_task = re.match(r"\ATask (\d+):", item)
+    if m_task and int(m_task.group(1)) > 1 and idx > 0:
+        prev = order[idx - 1]
+        if prev not in deps:
+            violations.append(f"前序依赖缺 CR1 任务链：{item!r} 必须依赖 {prev}（前一步产物）")
     if adopted:
+        # 条件 4-b：市场/证券样本必须出现在每条 adopted 证据对象的请求条件里
+        if not row["市场与证券样本"].strip().startswith("不适用"):
+            for code in sorted(set(SAMPLE_CODE_RE.findall(row["市场与证券样本"]))):
+                missing = [q for q in adopted if code not in str(rec_by_q.get(q["ID"], {}).get("请求条件", ""))]
+                if missing:
+                    violations.append(
+                        f"市场/证券不满足（{code} 未出现在 {[q['ID'] for q in missing]} 的证据对象请求条件）")
+        # 条件 4-c：准确期间——报告期间的每个日期/年份/半期 token 都必须落在 adopted 证据期间内
+        req_period = row["报告期间"].strip()
+        if not req_period.startswith("不适用"):
+            period_text = " ".join(
+                [q["请求期间"] + " " + q["查询条件"] for q in adopted]
+                + [str(rec_by_q.get(q["ID"], {}).get("期间覆盖", "")) for q in adopted]
+            )
+            want = (set(re.findall(r"(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)", req_period))
+                    | set(re.findall(r"(?<!\d)\d{4}(?!\d)", req_period))
+                    | {t for t in HALF_TOKENS if t in req_period})
+            missing = sorted(t for t in want if t not in period_text)
+            if missing:
+                violations.append(f"期间不满足（报告期间 token {missing} 未落在 adopted 证据期间内）")
+        # 条件 4-d：字段/口径——台账声明的机检必需字段必须锚定在本行声明内、且逐条回到证据
         req_domains = {d.strip() for d in re.split(r"[；;]", row["数据域"])
                        if d.strip() and not d.strip().startswith("不适用")}
         qry_domains = {q["数据域"] for q in adopted}
         if req_domains and not (req_domains & qry_domains):
             violations.append(f"数据域不满足（REQ={sorted(req_domains)} ∩ QRY={sorted(qry_domains)} = ∅）")
-        req_period = row["报告期间"].strip()
-        if not req_period.startswith("不适用"):
-            req_years = set(re.findall(r"\b\d{4}\b", req_period))
-            qry_text = " ".join(
-                [q["请求期间"] for q in adopted]
-                + [records[b]["期间覆盖"] for b in bound_vrids if b in records]
-            )
-            qry_years = set(re.findall(r"\b\d{4}\b", qry_text))
-            if req_years and not (req_years & qry_years):
-                violations.append(f"期间满足（REQ {sorted(req_years)} ∩ QRY {sorted(qry_years)} = ∅）")
+        bindings = _declared_field_bindings(row["机检必需字段"])
+        for q in adopted:
+            terms = bindings.get(q["ID"])
+            if not terms:
+                violations.append(f"机检必需字段 未绑定 adopted 证据 {q['ID']}（字段/口径不可缺省）")
+                continue
+            declared = _norm(row["必需字段与口径"]) + _norm(row["CR1 原始必需数据"])
+            evidence = _norm(_evidence_field_text(q, records))
+            for term in terms:
+                if len(term.strip()) < 2:
+                    violations.append(f"机检必需字段 词元 {term!r} 过短，不足以绑定字段")
+                if _norm(term) not in declared:
+                    violations.append(
+                        f"机检必需字段 词元 {term!r} 未出现在本行 必需字段与口径／CR1 原始必需数据 内（声明漂移）")
+                if _norm(term) not in evidence:
+                    violations.append(f"{q['ID']} 证据未返回声明字段 {term!r}（字段/口径不满足）")
     return violations
 
 
@@ -224,13 +332,14 @@ def check_req(reqs: list[dict], mapping: list[dict], known: set[str], *,
               qry: list[dict], lic: list[dict], records: dict) -> dict[str, tuple[int, int, list[str]]]:
     want = expected_reqs(mapping)
     flat = [i for batch in want.values() for i in batch]
+    items = cr1_items(mapping)
     got = [r["ID"] for r in reqs]
     if got != flat:
         raise AssertionError(f"必需查询集条目或顺序偏离 CR1 required-data 展开：现 {got} != 应 {flat}")
     qry_by_id = {r["ID"]: r for r in qry}
     lic_by_id = {r["ID"]: r for r in lic}
     machine: dict[str, bool] = {}
-    for row, req_id in zip(reqs, flat):
+    for i, (row, req_id) in enumerate(zip(reqs, flat)):
         for col in REQ_COLUMNS:
             if not row[col].strip():
                 raise AssertionError(f"REQ 行 {req_id} 字段 {col} 为空")
@@ -238,11 +347,16 @@ def check_req(reqs: list[dict], mapping: list[dict], known: set[str], *,
             raise AssertionError(f"REQ id {req_id!r} 非 REQ-NN")
         if row["覆盖判定"] not in REQ_VERDICTS:
             raise AssertionError(f"REQ 行 {req_id} 覆盖判定 {row['覆盖判定']!r} 不在 {REQ_VERDICTS}")
+        # B-CODE-02：CR1 原始 required-data 元素必须与该序号逐字对应，不允许只按个数生成编号
+        if row["CR1 原始必需数据"] != items[i]:
+            raise AssertionError(
+                f"REQ 行 {req_id} 的 CR1 原始必需数据 {row['CR1 原始必需数据']!r} "
+                f"!= CR1 required-data 元素 {items[i]!r}")
         if row["关联证据行"].strip() != "无":
             check_ref_cell(row["关联证据行"], known, where=f"REQ {req_id} 关联证据行")
         # §4.5 四条件机检——覆盖与否由现算而非由本行「覆盖判定」标签决定
         violations = _req_violations(row, qry_by_id=qry_by_id, lic_by_id=lic_by_id,
-                                     records=records, machine=machine)
+                                     records=records, machine=machine, order=flat, items=items)
         machine[req_id] = not violations
         label = row["覆盖判定"] == "覆盖"
         if label != machine[req_id]:
@@ -547,13 +661,125 @@ class ReadinessHandoff(RepoTest):
     def test_legal_coverage_positive_example_passes(self) -> None:
         """REQ-01/03/13/14/16/24/30 现值均满足四条件（正向确认，防恒假断言）。"""
         legal = {"REQ-01", "REQ-03", "REQ-13", "REQ-14", "REQ-16", "REQ-24", "REQ-30"}
+        order = [r["ID"] for r in self.req]
+        items = cr1_items(self.mapping)
         for rid in legal:
             row = next(r for r in self.req if r["ID"] == rid)
             v = _req_violations(row, qry_by_id={q["ID"]: q for q in self.qry},
                                 lic_by_id={l["ID"]: l for l in self.lic},
                                 records=self.records,
-                                machine={r["ID"]: (r["覆盖判定"] == "覆盖") for r in self.req})
+                                machine={r["ID"]: (r["覆盖判定"] == "覆盖") for r in self.req},
+                                order=order, items=items)
             self.assertEqual(v, [], f"{rid} 应满足四条件却检出 violations={v}")
+
+    # --- B-CODE-02 反例（二）：逐项绑定的非哈希失败路径 ---
+    def _req_row(self, req_id: str, **patch) -> list[dict]:
+        bad = [dict(r) for r in self.req]
+        idx = next(i for i, r in enumerate(bad) if r["ID"] == req_id)
+        bad[idx].update(patch)
+        return bad
+
+    def _qry_with_record(self, qry_id: str, mutate) -> tuple[list[dict], dict]:
+        """改对象内容并按现算重发行哈希，使失败只可能来自被检的绑定（而非哈希不等）。"""
+        qry = {r["ID"]: dict(r) for r in self.qry}
+        records = {k: dict(v) for k, v in self.records.items()}
+        vrid = RECORD_REF_RE.search(qry[qry_id]["证据对象引用"]).group(1)
+        mutate(records[vrid])
+        qry[qry_id]["SHA-256"] = sha256_record(records[vrid])
+        return [qry[r["ID"]] for r in self.qry], records
+
+    def _check_with(self, reqs, *, qry=None, lic=None, records=None):
+        check_req(reqs, self.mapping, self.known, qry=qry or self.qry, lic=lic or self.lic,
+                  records=records or self.records)
+
+    def test_cr1_required_data_binding_drift_rejected(self) -> None:
+        """REQ-01 的 CR1 原始必需数据改成别的 CR1 元素 ⇒ 逐项绑定破坏。"""
+        with self.assertRaisesRegex(AssertionError, "CR1 原始必需数据"):
+            self._check_req_wrapper(self._req_row("REQ-01", **{"CR1 原始必需数据": "上一版模型"}))
+
+    def test_same_year_wrong_quarter_cannot_sign_coverage(self) -> None:
+        """REQ-01 报告期间改成 2025 年其它季度（同年）⇒ 该季度日期不落在证据期间内。"""
+        with self.assertRaisesRegex(AssertionError, "期间不满足"):
+            self._check_req_wrapper(self._req_row("REQ-01", 报告期间="2025 年第一季度（2025-03-31）"))
+
+    def test_wrong_security_sample_cannot_sign_coverage(self) -> None:
+        """REQ-01 证券改成别的已登记证券 ⇒ 该代码未出现在证据对象请求条件里。"""
+        with self.assertRaisesRegex(AssertionError, "市场/证券不满足"):
+            self._check_req_wrapper(self._req_row(
+                "REQ-01", 市场与证券样本="A 股 600519/SH（SMP-02，四条件已核实）；H 股侧无登记样例"))
+
+    def test_missing_required_field_cannot_sign_coverage(self) -> None:
+        """证据对象与该行都不再返回 净利润/营业收入 ⇒ 声明的必需字段无证据。"""
+
+        def mutate(rec: dict) -> None:
+            rec["字段清单"] = "Wind代码、证券简称、2025年ROE"
+
+        qry, records = self._qry_with_record("QRY-01", mutate)
+        for row in qry:
+            if row["ID"] == "QRY-01":
+                row["返回字段与结果状态"] = "成功；1 行 × 3 指标（error=null）；字段清单=" + "Wind代码、证券简称、2025年ROE"
+        with self.assertRaisesRegex(AssertionError, "证据未返回声明字段"):
+            self._check_with(self.req, qry=qry, records=records)
+
+    def test_wrong_caliber_field_cannot_sign_coverage(self) -> None:
+        """REQ-03 声明的字段改成证据未返回的「生成日期」⇒ 字段/口径不满足。"""
+        with self.assertRaisesRegex(AssertionError, "证据未返回声明字段"):
+            self._check_req_wrapper(self._req_row(
+                "REQ-03", **{"机检必需字段": "QRY-02:生成日期"}))
+
+    def test_required_field_binding_drift_rejected(self) -> None:
+        """机检必需字段 改成 必需字段与口径 里没有的词元 ⇒ 声明漂移（防自造词元）。"""
+        with self.assertRaisesRegex(AssertionError, "声明漂移"):
+            self._check_req_wrapper(self._req_row(
+                "REQ-01", **{"机检必需字段": "QRY-01:总市值"}))
+
+    def test_adopted_but_failed_evidence_cannot_sign_coverage(self) -> None:
+        """REQ-01 的证据对象结果状态改为失败（哈希同步重发）⇒ 条件 2 真实成功不成立。"""
+        qry, records = self._qry_with_record(
+            "QRY-01", lambda rec: rec.update({"结果状态": "失败；error=账户积分不足，未返回数据"}))
+        with self.assertRaisesRegex(AssertionError, "非本次实测成功"):
+            self._check_with(self.req, qry=qry, records=records)
+
+    def test_wrong_purpose_licence_cannot_sign_coverage(self) -> None:
+        """LIC-01 用途改成 研究引用展示 ⇒ 逐条 adopted 证据缺少「本机自用」已确认许可。"""
+        lic = [dict(r) for r in self.lic]
+        next(r for r in lic if r["ID"] == "LIC-01")["用途"] = "研究引用展示"
+        with self.assertRaisesRegex(AssertionError, "本机自用"):
+            self._check_with(self.req, lic=lic)
+
+    def test_multi_source_missing_licence_cannot_sign_coverage(self) -> None:
+        """REQ-30 的三个采用源只保留 LIC-07 ⇒ 另两条 adopted 证据无对应已确认许可。"""
+        with self.assertRaisesRegex(AssertionError, "未关联到"):
+            self._check_req_wrapper(self._req_row(
+                "REQ-30", 关联证据行="QRY-03；QRY-01；QRY-02；SRC-05；VR-03；VR-01；VR-02；LIC-07"))
+
+    def test_missing_upstream_task_dependency_rejected(self) -> None:
+        """REQ-08 删去 CR1 任务链要求的 REQ-07 ⇒ 前序依赖未从原始任务契约核对。
+
+        REQ-08 本身按 §4.5 如实未覆盖（模型文件无对象），所以这里直接断言机检明细：
+        默认前序依赖无「任务链」violation，删成 `无` 后必须出现。
+        """
+        kw = dict(qry_by_id={q["ID"]: q for q in self.qry},
+                  lic_by_id={l["ID"]: l for l in self.lic}, records=self.records,
+                  machine={r["ID"]: (r["覆盖判定"] == "覆盖") for r in self.req},
+                  order=[r["ID"] for r in self.req], items=cr1_items(self.mapping))
+        base = next(r for r in self.req if r["ID"] == "REQ-08")
+        self.assertEqual([v for v in _req_violations(dict(base), **kw) if "任务链" in v], [])
+        broken = dict(base, 前序依赖="无")
+        self.assertTrue(any("任务链" in v for v in _req_violations(broken, **kw)))
+
+    def test_historical_quarter_requirement_still_passes(self) -> None:
+        """正向：REQ 期间为历史季度且请求/证据同步到该季度时，覆盖判定不得失败（§2.2 6(b)(c)）。"""
+        qry = {r["ID"]: dict(r) for r in self.qry}
+        records = {k: dict(v) for k, v in self.records.items()}
+        cond = "问题=查询广信股份(603599.SH)2025年第一季度ROE；start_date=2025-01-01；end_date=2025-03-31"
+        qry["QRY-01"]["查询条件"] = cond
+        qry["QRY-01"]["请求期间"] = "2025 年第一季度（2025-01-01～2025-03-31）"
+        records["VR-01"]["请求条件"] = cond
+        records["VR-01"]["期间覆盖"] = "2025 年第一季度（2025-01-01～2025-03-31），单期"
+        qry["QRY-01"]["SHA-256"] = sha256_record(records["VR-01"])
+        reqs = self._req_row("REQ-01", 报告期间="2025 年第一季度（2025-03-31）")
+        self._check_with(reqs, qry=[qry[r["ID"]] for r in self.qry], records=records)
 
 
 if __name__ == "__main__":

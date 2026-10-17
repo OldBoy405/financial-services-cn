@@ -287,6 +287,12 @@ class ReinstallRepro(RepoTest):
         self.run_window = read_run_window()
         self.client_token = self.run_window["客户端版本"].split("（")[0].strip()
         self.old_installed_sha = self.measured["安装态对照"]["installed_0.10.0_manifest_sha256"]
+        if not OUT_PKG.is_dir():
+            # 干净 worktree 上读取包内文件的用例先于导出用例执行：先复现一次导出物
+            # （可复现性本身仍由 test_export_is_reproducible_and_within_contract 两次现导 + RIN-01 摘要校验）。
+            proc = export(ROOT)
+            self.assertEqual(proc.returncode, 0,
+                             f"导出失败，包内证据无从机检：{(proc.stderr or '').strip()[:200]}")
 
     # --- FR-08: package version and the connector identifiers ---
     def test_manifest_version_and_fields(self) -> None:

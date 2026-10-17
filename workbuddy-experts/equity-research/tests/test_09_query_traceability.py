@@ -190,6 +190,56 @@ def _date_span(text: str) -> tuple[str, str] | None:
     return (min(ds), max(ds))
 
 
+# B-CODE-04：哈希只证明所指对象内容一致，不证明对象属于本次请求。行↔对象必须另按
+# 请求条件/源与工具/结果状态/字段清单/时间/证券逐项绑定，绑定不符即拒，与哈希是否相等无关。
+VERDICT_RE = re.compile(r"\A(成功|失败|空结果)")
+CODE_EXCHANGE_RE = re.compile(r"\b(\d{6})\.([A-Z]{2})\b")
+
+
+def _led_verdict(text: str) -> str:
+    m = VERDICT_RE.match(text.strip())
+    if not m:
+        raise AssertionError(f"结果状态未以 成功/失败/空结果 起头（§2.3 七字段之一不可缺）: {text[:40]!r}")
+    return m.group(1)
+
+
+def _bind_qry_record(row: dict, record: dict, *, where: str) -> None:
+    """同一请求层：行声明的请求/来源/结果必须与证据对象逐项一致（§2.2 不变量 6(a)(b)/§4.3）。"""
+    if record["请求条件"] != row["查询条件"]:
+        raise AssertionError(
+            f"{where} 证据对象请求条件与行 查询条件 不一致（对象不属于本次请求）："
+            f"{record['请求条件']!r} != {row['查询条件']!r}")
+    entry = row["源"].split("（")[0].split("／")[0].strip()
+    parts = [p.strip() for p in row["源"].split("／") if p.strip()]
+    tool = parts[-1] if len(parts) > 1 else None
+    if entry not in record["源与工具"] or (tool is not None and tool not in record["源与工具"]):
+        raise AssertionError(
+            f"{where} 证据对象 源与工具 {record['源与工具']!r} 未绑定行的 源 {row['源']!r}")
+    if _led_verdict(record["结果状态"]) != _led_verdict(row["返回字段与结果状态"]):
+        raise AssertionError(
+            f"{where} 结果状态不一致：对象 {record['结果状态'][:40]!r} 与行 "
+            f"{row['返回字段与结果状态'][:40]!r}")
+    if record["字段清单"] not in row["返回字段与结果状态"]:
+        raise AssertionError(
+            f"{where} 行的 返回字段与结果状态 未绑定对象字段清单 {record['字段清单']!r}")
+    if record["检索时间"] != row["数据/获取时间戳"]:
+        raise AssertionError(
+            f"{where} 对象检索时间 {record['检索时间']!r} != 行 数据/获取时间戳 "
+            f"{row['数据/获取时间戳']!r}（对象时间与行时间必须是同一次请求）")
+    code_exchange = row["证券代码/交易所"].strip()
+    if code_exchange.startswith("不适用"):
+        return
+    head, _, tail = code_exchange.partition("/")
+    code = head.split("（")[0].strip()
+    exchange = tail.split("（")[0].strip().lstrip(".") if tail else ""
+    if code and code not in record["请求条件"]:
+        raise AssertionError(f"{where} 证券代码 {code!r} 未出现在对象请求条件中（市场/证券未绑定）")
+    declared = {e for c, e in CODE_EXCHANGE_RE.findall(record["请求条件"]) if c == code}
+    if declared and exchange and exchange not in declared:
+        raise AssertionError(
+            f"{where} 交易所 {exchange!r} 与对象请求条件中登记的 {sorted(declared)} 不一致")
+
+
 def check_qry(rows: list[dict], smp: list[dict], records: dict[str, dict],
               lic: list[dict], run_window: dict[str, str]) -> None:
     require_ids(rows, "QRY", minimum=7)
@@ -233,6 +283,7 @@ def check_qry(rows: list[dict], smp: list[dict], records: dict[str, dict],
         _forbid_field_values(row["口径"], where=f"QRY 行 {row['ID']} 口径")
         _forbid_field_values(row["返回字段与结果状态"], where=f"QRY 行 {row['ID']} 返回字段与结果状态")
         check_object_hash(row, record=record)
+        _bind_qry_record(row, record, where=f"QRY 行 {row['ID']}")
 
         # 6(a) sample identity layer: securities code + exchange must equal a verified SMP row
         code_exchange = row["证券代码/交易所"].strip()
@@ -258,20 +309,27 @@ def check_qry(rows: list[dict], smp: list[dict], records: dict[str, dict],
             # 请求期间 必须原样承载 查询条件 中 start/end 参数（§2.2 不变量 6(b)：结果覆盖不得反写请求）
             req_dates = _extract_request_dates(row["查询条件"])
             period_span = _date_span(period)
-            if req_dates is not None:
-                if period_span is None or not (period_span[0] <= req_dates[0] and req_dates[1] <= period_span[1]):
-                    raise AssertionError(
-                        f"QRY 行 {row['ID']} 请求期间 {period!r} 未原样承载查询条件参数区间 {req_dates}"
-                        f"（§2.2 不变量 6(b)：返回覆盖不能改写本次请求期间）")
             coverage = record["期间覆盖"]
             # 证据对象的期间覆盖必须 ⊆ 请求期间（非交易日截断合法，反写或扩张非法）
             cov_span = _date_span(coverage)
             if req_dates is not None:
-                if cov_span is not None and period_span is not None:
-                    if not (period_span[0] <= cov_span[0] and cov_span[1] <= period_span[1]):
+                # §2.2 不变量 6(b)：请求期间 = 用户指定期间，必须与查询条件参数区间相等，
+                # 既不得被返回覆盖反写（过窄），也不得任意扩张成超集。
+                if period_span != req_dates:
+                    raise AssertionError(
+                        f"QRY 行 {row['ID']} 请求期间 {period!r} 与查询条件参数区间 {req_dates} 不等"
+                        f"（§2.2 不变量 6(b)：请求期间 = 用户指定期间，不得反写或扩成超集）")
+                if cov_span is not None and not (period_span[0] <= cov_span[0] and cov_span[1] <= period_span[1]):
+                    raise AssertionError(
+                        f"QRY 行 {row['ID']} 证据对象期间覆盖 {cov_span} 越出请求期间 {period_span}"
+                        f"（§2.2 不变量 6(b)：覆盖 ⊆ 请求）")
+                # 返回交易日覆盖单列核验：截断发生时，行内必须把实际覆盖与请求期间分开留证，
+                # 不得只写一个数（否则无法区分「请求期」与「返回期」）。
+                if cov_span is not None and cov_span != req_dates:
+                    if cov_span[0] not in period or cov_span[1] not in period:
                         raise AssertionError(
-                            f"QRY 行 {row['ID']} 证据对象期间覆盖 {cov_span} 越出请求期间 {period_span}"
-                            f"（§2.2 不变量 6(b)：覆盖 ⊆ 请求）")
+                            f"QRY 行 {row['ID']} 请求期间 {period!r} 未单列承载实际返回覆盖 {cov_span}"
+                            f"（§2.2 不变量 6(b)：请求期与返回期必须分别留证）")
             elif period not in coverage:
                 raise AssertionError(
                     f"QRY 行 {row['ID']} 请求期间 {period!r} 与证据对象期间覆盖 {coverage!r} 不一致")
@@ -428,11 +486,14 @@ class QueryTraceability(RepoTest):
             check_qry(rows, self.smp, {**self.records, "VR-01": record}, self.lic, self.run_window)
 
     def test_historical_quarter_row_passes(self) -> None:
-        """已授权源可返回指定历史季度：成功行按原请求期间留证，不得因与样例选取期间不等而失败。"""
+        """已授权源可返回指定历史季度：把真实请求条件同步到该季度后必须通过（§2.2 6(b)(c)）。"""
         row = dict(self.qry[0])
         record = dict(self.records["VR-01"])
-        record["期间覆盖"] = "2025 年第一季度（2025-03-31），单期"
-        row["请求期间"] = "2025 年第一季度（2025-03-31）"
+        row["查询条件"] = ("问题=查询广信股份(603599.SH)2025年第一季度ROE；"
+                       "start_date=2025-01-01；end_date=2025-03-31")
+        row["请求期间"] = "2025 年第一季度（2025-01-01～2025-03-31）"
+        record["请求条件"] = row["查询条件"]
+        record["期间覆盖"] = "2025 年第一季度（2025-01-01～2025-03-31），单期"
         row["SHA-256"] = sha256_record(record)
         rows = [dict(r) for r in self.qry]
         rows[0] = row
@@ -520,12 +581,85 @@ class QueryTraceability(RepoTest):
             check_qry(self.qry, self.smp, records, self.lic, self.run_window)
 
     def test_qry_bound_to_wrong_record_rejected(self) -> None:
-        """换记录（QRY-06 指向 VR-07）：SHA-256 与 canonical hash 不等必须拒。"""
+        """换记录（QRY-06 指向 VR-07）并同步正确哈希：仍必须因请求/来源/字段绑定不符而失败。"""
         bad = [dict(r) for r in self.qry]
         idx = next(i for i, r in enumerate(bad) if r["ID"] == "QRY-06")
+        records = {k: dict(v) for k, v in self.records.items()}
         bad[idx]["证据对象引用"] = "workbuddy-experts/equity-research/evidence/queries.md#核验记录对象/VR-07"
-        with self.assertRaises(AssertionError):
+        bad[idx]["SHA-256"] = sha256_record(records["VR-07"])
+        with self.assertRaisesRegex(AssertionError, "请求条件"):
+            check_qry(bad, self.smp, records, self.lic, self.run_window)
+
+    # --- B-CODE-04 反例（二）：参数期超集 / 返回覆盖未单列 / 对象与行的绑定逐项断裂 ---
+    def _with_record_patch(self, vrid: str, **patch):
+        records = {k: dict(v) for k, v in self.records.items()}
+        records[vrid].update(patch)
+        rows = [dict(r) for r in self.qry]
+        for row in rows:
+            ref = RECORD_REF_RE.search(row["证据对象引用"])
+            if ref and ref.group(1) == vrid:
+                row["SHA-256"] = sha256_record(records[vrid])
+        return rows, records
+
+    def test_request_period_superset_of_params_rejected(self) -> None:
+        """参数期是超集（请求 end 扩到 2026-10-10）也必须拒：请求期间 = 用户指定期间。"""
+        bad = [dict(r) for r in self.qry]
+        idx = next(i for i, r in enumerate(bad) if r["ID"] == "QRY-06")
+        bad[idx]["请求期间"] = ("2026-09-16～2026-10-10（请求参数原样承载；返回实际覆盖 "
+                          "2026-09-16～2026-09-30，非交易日截断）")
+        with self.assertRaisesRegex(AssertionError, "不等"):
             check_qry(bad, self.smp, self.records, self.lic, self.run_window)
+
+    def test_returned_coverage_must_be_declared_separately_rejected(self) -> None:
+        """截断发生时只写请求期、不单列返回覆盖 ⇒ 无法区分请求期与返回期，必须拒。"""
+        bad = [dict(r) for r in self.qry]
+        idx = next(i for i, r in enumerate(bad) if r["ID"] == "QRY-06")
+        bad[idx]["请求期间"] = "2026-09-16～2026-10-03（请求参数原样承载）"
+        with self.assertRaisesRegex(AssertionError, "未单列承载"):
+            check_qry(bad, self.smp, self.records, self.lic, self.run_window)
+
+    def test_record_request_conditions_binding_rejected(self) -> None:
+        """对象请求条件改为另一次请求（哈希同步正确）⇒ 对象不属于本次请求。"""
+        rows, records = self._with_record_patch(
+            "VR-01", **{"请求条件": "问题=查询广信股份(603599.SH)2025年第一季度ROE"})
+        with self.assertRaisesRegex(AssertionError, "不一致"):
+            check_qry(rows, self.smp, records, self.lic, self.run_window)
+
+    def test_record_source_and_tool_binding_rejected(self) -> None:
+        """对象源与工具换成其它连接器 ⇒ 来源未绑定行声明的 源。"""
+        rows, records = self._with_record_patch(
+            "VR-01", **{"源与工具": "tdx-connector（通达信 1.0.0） / mcp__tdx-connector__tdx_api_data"})
+        with self.assertRaisesRegex(AssertionError, "源与工具"):
+            check_qry(rows, self.smp, records, self.lic, self.run_window)
+
+    def test_record_result_status_binding_rejected(self) -> None:
+        """对象结果状态改为失败而行仍记成功 ⇒ 结果状态未绑定。"""
+        rows, records = self._with_record_patch("VR-01", **{"结果状态": "失败；error=积分不足"})
+        with self.assertRaisesRegex(AssertionError, "结果状态不一致"):
+            check_qry(rows, self.smp, records, self.lic, self.run_window)
+
+    def test_record_field_list_binding_rejected(self) -> None:
+        """对象字段清单不在行 返回字段与结果状态 内 ⇒ 字段未绑定。"""
+        rows, records = self._with_record_patch("VR-01", **{"字段清单": "totalStocks、expression"})
+        with self.assertRaisesRegex(AssertionError, "字段清单"):
+            check_qry(rows, self.smp, records, self.lic, self.run_window)
+
+    def test_record_timestamp_binding_rejected(self) -> None:
+        """对象检索时间在窗但不同于行时间 ⇒ 对象时间与行时间非同一请求。"""
+        rows, records = self._with_record_patch("VR-01", **{"检索时间": "2026-10-03T17:41:00+08:00"})
+        with self.assertRaisesRegex(AssertionError, "对象检索时间"):
+            check_qry(rows, self.smp, records, self.lic, self.run_window)
+
+    def test_swapped_security_binding_rejected(self) -> None:
+        """行改成另一个已登记样例证券 ⇒ 该代码不在对象请求条件里（市场/证券未绑定）。"""
+        smp = [dict(r) for r in self.smp]
+        other = dict(smp[0])
+        other.update({"ID": "SMP-09", "证券代码": "600519", "交易所": "SH"})
+        smp.append(other)
+        bad = [dict(r) for r in self.qry]
+        bad[0]["证券代码/交易所"] = "600519/SH"
+        with self.assertRaisesRegex(AssertionError, "证券代码"):
+            check_qry(bad, smp, self.records, self.lic, self.run_window)
 
     def test_non_trading_truncation_still_passes(self) -> None:
         """合法非交易日截断（请求 09-16～10-03、覆盖 09-16～09-30）仍必须通过（positive case）。"""
