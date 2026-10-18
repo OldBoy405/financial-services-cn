@@ -280,3 +280,104 @@ manifest 已按目标校验器 5.5.6 实际 schema 校正：i18n 字段（displa
 ## 5. 研究质量（本 CR 始终待测）
 
 九项研究内容与 DOCX/XLSX 的端到端合格判定不在本 CR 范围（`sdd.md` §8 `scope_out`）。即使 `earnings` 作为产物试点，也只验包与路由，**不**签研究产物质量。本 CR 交付时"研究质量=通过"的项数必须为 **0**。
+
+## 6. M1 研究证据与裁决记录
+
+本节是 `CR-FS-2026-003`（研究主链 M1）唯一版本化的研究证据与裁决索引。原始会话、宿主回执与产物只存于代码仓忽略区 `out/evidence/m1/**`，本节只记录相对路径、SHA-256、状态与脱敏摘要（≤400 字符），不含逐字会话正文、绝对路径或凭据。`research-state` 四态（`待测`/`通过`/`不通过`/`需重测`）由 Ray 裁决；门禁通过只代表可进入裁决，不代表研究质量已通过。
+
+<!-- m1-research:start -->
+```json
+{
+  "schema-version": 1,
+  "cr": "CR-FS-2026-003",
+  "recorded-at": "2026-10-17T23:18:35+08:00",
+  "package-version": "0.11.0",
+  "skill-source-head": "a919ac6f221d9675539285fa2a4b2153d8feb20e",
+  "prerequisites": {
+    "cr1": {
+      "status": "",
+      "accepted": false,
+      "evidence-ref": "",
+      "checked-at": "",
+      "checked-by": ""
+    },
+    "cr2": {
+      "status": "",
+      "accepted": false,
+      "evidence-ref": "",
+      "checked-at": "",
+      "checked-by": ""
+    },
+    "existing-model": {
+      "status": "",
+      "accepted": false,
+      "rights-evidence-ref": "",
+      "baseline-sha256": "",
+      "checked-at": ""
+    }
+  },
+  "slots": [
+    {
+      "slot": "M1-01",
+      "acceptance-slot": "SLOT-01",
+      "skill": "earnings-analysis",
+      "research-state": "待测",
+      "adjudicator": "",
+      "adjudicated-at": "",
+      "rationale": "",
+      "positive-cases": [],
+      "negative-cases": [],
+      "quality-checklist": [],
+      "artifacts": [],
+      "cross-session": null,
+      "replay": [],
+      "skill-change": {
+        "changed": false,
+        "verified-package-version": "0.11.0",
+        "skill-source-head": "a919ac6f221d9675539285fa2a4b2153d8feb20e"
+      }
+    },
+    {
+      "slot": "M1-02",
+      "acceptance-slot": "SLOT-03",
+      "skill": "model-update",
+      "research-state": "待测",
+      "adjudicator": "",
+      "adjudicated-at": "",
+      "rationale": "",
+      "positive-cases": [],
+      "negative-cases": [],
+      "quality-checklist": [],
+      "artifacts": [],
+      "cross-session": null,
+      "replay": [],
+      "skill-change": {
+        "changed": false,
+        "verified-package-version": "0.11.0",
+        "skill-source-head": "a919ac6f221d9675539285fa2a4b2153d8feb20e"
+      }
+    },
+    {
+      "slot": "M1-03",
+      "acceptance-slot": "SLOT-02",
+      "skill": "initiating-coverage",
+      "research-state": "待测",
+      "adjudicator": "",
+      "adjudicated-at": "",
+      "rationale": "",
+      "positive-cases": [],
+      "negative-cases": [],
+      "quality-checklist": [],
+      "artifacts": [],
+      "cross-session": null,
+      "replay": [],
+      "skill-change": {
+        "changed": false,
+        "verified-package-version": "0.11.0",
+        "skill-source-head": "a919ac6f221d9675539285fa2a4b2153d8feb20e"
+      }
+    }
+  ]
+}
+```
+<!-- m1-research:end -->

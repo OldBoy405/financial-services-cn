@@ -6,6 +6,8 @@ loudly when a prerequisite is missing. Nothing here writes to the repository.
 """
 from __future__ import annotations
 
+import datetime
+import hashlib
 import json
 import re
 import shutil
@@ -306,3 +308,382 @@ class RepoTest(unittest.TestCase):
             re.DOTALL,
         )
         return [parse_yaml_subset(b) for b in blocks]
+
+# ---------------------------------------------------------------------------
+# CR-FS-2026-003 (研究主链 M1) — shared evidence contract.
+# The `m1-research` JSON block in ACCEPTANCE.md §6 is the only versioned
+# evidence index; raw sessions/artifacts stay in the ignored `out/` tree.
+# ---------------------------------------------------------------------------
+
+M1_BLOCK = "m1-research"
+M1_CR = "CR-FS-2026-003"
+M1_SCHEMA_VERSION = 1
+M1_SLOTS = (
+    ("M1-01", "SLOT-01", "earnings-analysis"),
+    ("M1-02", "SLOT-03", "model-update"),
+    ("M1-03", "SLOT-02", "initiating-coverage"),
+)
+M1_LANGUAGES = ("zh-CN", "en-US")
+M1_MARKETS = ("A股", "港股", "美股公开面")
+M1_NEGATIVE_TYPES = (
+    "historical-quarter",
+    "code-ambiguity",
+    "no-permission",
+    "conflicting-sources",
+    "missing-consensus",
+    "missing-prerequisite",
+)
+M1_REPLAY_DECISIONS = ("reuse", "redo", "revision", "confirmation-rejected")
+M1_POSITIVE_CASE_KEYS = (
+    "case-id",
+    "language",
+    "market",
+    "input-summary",
+    "response-summary",
+    "session-record",
+    "client-version",
+    "tool-version",
+    "collected-at",
+    "expected",
+    "actual",
+    "result",
+)
+M1_NEGATIVE_CASE_KEYS = (
+    "case-id",
+    "type",
+    "input-summary",
+    "response-summary",
+    "session-record",
+    "expected",
+    "actual",
+    "result",
+    "not-applicable",
+)
+M1_ARTIFACT_KINDS = ("DOCX", "XLSX", "ZIP", "SUMMARY", "CHANGELOG", "REPORT", "MODEL-COPY")
+M1_OPEN_RESULTS = ("成功", "失败", "未执行")
+M1_CASE_SUMMARY_LIMIT = 400
+M1_REQUIRED_ARTIFACTS = {
+    "M1-01": ("DOCX", "SUMMARY"),
+    "M1-02": ("MODEL-COPY", "XLSX", "CHANGELOG"),
+    "M1-03": ("REPORT", "XLSX", "ZIP", "DOCX"),
+}
+M1_EARNINGS_CHECKLIST_SIZE = 8
+M1_EVIDENCE_PREFIX = "out/"
+M1_TOOL_RESULTS = ("成功", "失败", "不支持", "未执行")
+M1_TABLE_ROUTES = ("new", "existing")
+M1_TOOL_ROUTES = (
+    "tencent-docx",
+    "tencent-docs-sheet-generation",
+    "tencent-docs-sheetagent",
+    "tencent-local-office-edit",
+    "host-preview",
+    "matplotlib-fallback",
+)
+M1_INITIATE_STAGES = (
+    ("M1-03-T1", ("REPORT",)),
+    ("M1-03-T2", ("XLSX",)),
+    ("M1-03-T3", ("REPORT", "XLSX")),
+    ("M1-03-T4", ("ZIP",)),
+    ("M1-03-T5", ("DOCX",)),
+)
+M1_SCOPE_EXACT_FILES = (
+    "workbuddy-experts/equity-research/ACCEPTANCE.md",
+    "workbuddy-experts/equity-research/tests/_support.py",
+    "workbuddy-experts/equity-research/tests/test_04_localization.py",
+    "workbuddy-experts/equity-research/tests/test_08_m1_evidence.py",
+    "workbuddy-experts/equity-research/tests/test_09_m1_earnings.py",
+    "workbuddy-experts/equity-research/tests/test_10_m1_model_update.py",
+    "workbuddy-experts/equity-research/tests/test_11_m1_initiate.py",
+)
+M1_SCOPE_CONDITIONAL_PREFIXES = (
+    "plugins/vertical-plugins/equity-research/skills/earnings-analysis/",
+    "plugins/vertical-plugins/equity-research/skills/model-update/",
+    "plugins/vertical-plugins/equity-research/skills/initiating-coverage/",
+    "plugins/vertical-plugins/equity-research/commands/earnings.md",
+    "plugins/vertical-plugins/equity-research/commands/model-update.md",
+    "plugins/vertical-plugins/equity-research/commands/initiate.md",
+    "plugins/agent-plugins/earnings-reviewer/skills/earnings-analysis/",
+    "plugins/agent-plugins/earnings-reviewer/skills/model-update/",
+    "plugins/vertical-plugins/equity-research/.claude-plugin/plugin.json",
+    "plugins/agent-plugins/earnings-reviewer/.claude-plugin/plugin.json",
+    "workbuddy-experts/equity-research/.codebuddy-plugin/plugin.json",
+    "workbuddy-experts/equity-research/README.md",
+    "CUSTOM.md",
+)
+M1_ZERO_DIFF_PATHS = (
+    "workbuddy-experts/equity-research/agents/equity-research.md",
+    "scripts/check.py",
+    "scripts/sync-agent-skills.py",
+    "scripts/export_workbuddy_experts.py",
+    ".claude-plugin/marketplace.json",
+)
+M1_ZERO_DIFF_PREFIXES = ("managed-agent-cookbooks/", "plugins/partner-built/")
+M1_BASE_SHA = "a919ac6f221d9675539285fa2a4b2153d8feb20e"
+M1_ACCEPTANCE_PREFIX_SHA256 = (
+    "ee38cc4b5c0cf7c628c2a025de24063f51727e55e1533db8a34f87fbdfaebf51"
+)
+M1_README_BLOCK_SHA256 = {
+    "baseline-evidence": "f10a5723915c6d65d7f4cd8bacbbe60bded95c64f53248a87adf0188f531347e",
+    "sample-index": "875114abefda1c7f3894d5d43cb101ddcaa96ee497518daf05d6a181a1df81f6",
+}
+M1_AGENT_SHA256 = "4113db05c35fca48116ec0be1c668feb38f300d46c9b176d38bd3ad5def77f55"
+
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def sha256_file(path: Path) -> str:
+    """Return the lowercase sha256 of a file, streamed in binary chunks."""
+    if not path.is_file():
+        raise AssertionError(f"sha256_file: missing file: {path}")
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def read_json_block(path: Path, name: str) -> dict:
+    """Read a fenced machine block and parse its body as JSON."""
+    body = read_block(path, name)
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise AssertionError(f"{path.name}: block '{name}' is not valid JSON: {exc}") from exc
+
+
+def m1_slot(block: dict, slot_id: str) -> dict:
+    """Return the unique slot record whose `slot` equals `slot_id`."""
+    slots = block.get("slots") if isinstance(block, dict) else None
+    if not isinstance(slots, list):
+        raise AssertionError("m1-research: 'slots' must be a list")
+    hits = [slot for slot in slots if isinstance(slot, dict) and slot.get("slot") == slot_id]
+    if len(hits) != 1:
+        raise AssertionError(f"m1-research: expected exactly one slot {slot_id}, found {len(hits)}")
+    return hits[0]
+
+
+def resolve_evidence_path(rel_path: str) -> Path:
+    """Resolve a standalone `artifact.path` value under the code repo's `out/` tree."""
+    if not isinstance(rel_path, str) or not rel_path:
+        raise AssertionError("evidence path must be a non-empty POSIX relative path")
+    if rel_path.startswith("/") or "\\" in rel_path or re.match(r"^[A-Za-z]:", rel_path):
+        raise AssertionError(f"evidence path must be POSIX-relative without a drive: {rel_path!r}")
+    parts = rel_path.split("/")
+    if parts[0] != M1_EVIDENCE_PREFIX.rstrip("/") or ".." in parts:
+        raise AssertionError(f"evidence path must live under out/: {rel_path!r}")
+    resolved = (ROOT / rel_path).resolve()
+    out_root = (ROOT / "out").resolve()
+    if not resolved.is_relative_to(out_root):
+        raise AssertionError(f"evidence path escapes out/: {rel_path!r}")
+    return resolved
+
+
+def split_evidence_ref(ref: str) -> tuple[Path, str]:
+    """Split a combined `<out-relative path>::<sha256>` evidence reference."""
+    if not isinstance(ref, str) or "::" not in ref:
+        raise AssertionError(f"evidence reference must be '<path>::<sha256>': {ref!r}")
+    rel_path, _, digest = ref.rpartition("::")
+    path = resolve_evidence_path(rel_path)
+    if not _SHA256_RE.match(digest):
+        raise AssertionError(f"evidence reference digest must be 64 lowercase hex chars: {ref!r}")
+    return path, digest
+
+
+def _iso8601_problems(value: object, label: str) -> list[str]:
+    if not isinstance(value, str) or not value.strip():
+        return [f"{label}: missing ISO8601 timestamp"]
+    try:
+        parsed = datetime.datetime.fromisoformat(value)
+    except ValueError:
+        return [f"{label}: not an ISO8601 timestamp: {value!r}"]
+    if parsed.tzinfo is None:
+        return [f"{label}: timestamp must carry a timezone: {value!r}"]
+    return []
+
+
+def _ref_problems(ref: object, label: str) -> list[str]:
+    try:
+        path, digest = split_evidence_ref(ref)
+    except AssertionError as exc:
+        return [f"{label}: {exc}"]
+    if not path.is_file():
+        return [f"{label}: referenced file is missing: {ref}"]
+    if sha256_file(path) != digest:
+        return [f"{label}: sha256 does not match the referenced file: {ref}"]
+    return []
+
+
+def _three_part_problems(value: object, label: str) -> list[str]:
+    parts = value.split("|") if isinstance(value, str) else []
+    if len(parts) != 3 or any(not part.strip() for part in parts):
+        return [f"{label}: expected '<tool>|<version>|<route>': {value!r}"]
+    return []
+
+
+def _route_of(value: str) -> str:
+    return value.split("|")[2]
+
+
+def _load_ref_json(ref: object, label: str) -> tuple[dict | None, list[str]]:
+    problems = _ref_problems(ref, label)
+    if problems:
+        return None, problems
+    path, _ = split_evidence_ref(ref)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return None, [f"{label}: cannot parse referenced JSON: {exc}"]
+    if not isinstance(data, dict):
+        return None, [f"{label}: referenced JSON must be an object"]
+    return data, []
+
+
+def m1_readiness_problems(block: dict, context: str) -> list[str]:
+    """Fail-closed prerequisite gate shared by cmd-01 .. cmd-04 (plan §6 B-03)."""
+    if context not in ("develop", "collect"):
+        return [f"unknown evidence context {context!r}; only develop/collect are allowed"]
+    if not isinstance(block, dict):
+        return ["m1-research: evidence block must be an object"]
+    slots = block.get("slots")
+    if not isinstance(slots, list):
+        return ["m1-research: 'slots' must be a list"]
+    registered = any(
+        isinstance(slot, dict)
+        and (
+            slot.get("positive-cases")
+            or slot.get("negative-cases")
+            or slot.get("artifacts")
+            or slot.get("research-state") != "待测"
+        )
+        for slot in slots
+    )
+    if context != "collect" and not registered:
+        return []
+    prerequisites = block.get("prerequisites")
+    if not isinstance(prerequisites, dict):
+        return ["prerequisites: missing record map"]
+    problems: list[str] = []
+    for key in ("cr1", "cr2"):
+        item = prerequisites.get(key)
+        if not isinstance(item, dict):
+            problems.append(f"prerequisites.{key}: missing record")
+            continue
+        if item.get("accepted") is not True:
+            problems.append(f"prerequisites.{key}: accepted must be true before real evidence is consumed")
+        problems += _iso8601_problems(item.get("checked-at"), f"prerequisites.{key}.checked-at")
+        if not str(item.get("checked-by") or "").strip():
+            problems.append(f"prerequisites.{key}: checked-by is required")
+        problems += _ref_problems(item.get("evidence-ref"), f"prerequisites.{key}.evidence-ref")
+    existing = prerequisites.get("existing-model")
+    if not isinstance(existing, dict):
+        problems.append("prerequisites.existing-model: missing record")
+    else:
+        if existing.get("accepted") is not True:
+            problems.append("prerequisites.existing-model: accepted must be true before real evidence is consumed")
+        problems += _iso8601_problems(existing.get("checked-at"), "prerequisites.existing-model.checked-at")
+        problems += _ref_problems(
+            existing.get("rights-evidence-ref"), "prerequisites.existing-model.rights-evidence-ref"
+        )
+        baseline = existing.get("baseline-sha256")
+        if not isinstance(baseline, str) or not _SHA256_RE.match(baseline):
+            problems.append("prerequisites.existing-model: baseline-sha256 must be 64 lowercase hex chars")
+    return problems
+
+
+def m1_tool_record_problems(artifact: dict, expected_routes: tuple[str, ...]) -> list[str]:
+    """Fail-closed AC-06 host-file-tool record check (plan §6 B-07)."""
+    if not isinstance(artifact, dict):
+        return ["artifact record must be an object"]
+    problems = _three_part_problems(artifact.get("generated-by"), "generated-by")
+    meta = artifact.get("meta")
+    if not isinstance(meta, dict):
+        return problems + ["artifact.meta must be an object"]
+    if not str(meta.get("schema-query") or "").strip():
+        problems.append("meta.schema-query is required")
+    kind = artifact.get("kind")
+    if kind not in M1_ARTIFACT_KINDS:
+        problems.append(f"artifact.kind is not allowed: {kind!r}")
+    if kind in ("XLSX", "MODEL-COPY"):
+        if meta.get("table-route") not in M1_TABLE_ROUTES:
+            problems.append("meta.table-route must be new/existing for XLSX and MODEL-COPY")
+    elif kind == "ZIP":
+        for key in ("script", "dependencies", "inputs"):
+            value = meta.get(key)
+            if isinstance(value, str):
+                if not value.strip():
+                    problems.append(f"meta.{key} is required for ZIP")
+            elif not value:
+                problems.append(f"meta.{key} is required for ZIP")
+        inputs = meta.get("inputs")
+        if isinstance(inputs, list):
+            for index, item in enumerate(inputs):
+                problems += _ref_problems(item, f"meta.inputs[{index}]")
+        elif inputs:
+            problems.append("meta.inputs must be a list of <path>::<sha256> references")
+    result = meta.get("tool-result")
+    if result not in M1_TOOL_RESULTS:
+        return problems + [f"meta.tool-result is not allowed: {result!r}"]
+    actual_route = _route_of(artifact["generated-by"]) if not _three_part_problems(
+        artifact.get("generated-by"), "generated-by"
+    ) else ""
+    if result != "不支持":
+        if actual_route not in expected_routes:
+            problems.append(
+                f"generated-by route {actual_route!r} is not allowed here; expected one of {expected_routes}"
+            )
+        return problems
+    unsupported = meta.get("unsupported-generated-by")
+    unsupported_problems = _three_part_problems(unsupported, "meta.unsupported-generated-by")
+    problems += unsupported_problems
+    if not unsupported_problems and _route_of(unsupported) not in expected_routes:
+        problems.append(
+            f"meta.unsupported-generated-by route {_route_of(unsupported)!r} is not in {expected_routes}"
+        )
+    deviations = artifact.get("deviations")
+    matching = None
+    if isinstance(deviations, list):
+        for deviation in deviations:
+            if isinstance(deviation, dict) and deviation.get("actual") == artifact.get("generated-by"):
+                matching = deviation
+                break
+    if matching is None:
+        problems.append("a deviation whose actual equals generated-by is required when the tool is unsupported")
+    else:
+        for key in ("requirement", "actual", "reason", "adjudication-ref"):
+            if not str(matching.get(key) or "").strip():
+                problems.append(f"deviation.{key} is required")
+        adjudication, adjudication_problems = _load_ref_json(
+            matching.get("adjudication-ref"), "deviation.adjudication-ref"
+        )
+        problems += adjudication_problems
+        if adjudication is not None:
+            if adjudication.get("adjudicator") != "Ray":
+                problems.append("adjudication record must be adjudicated by Ray")
+            if adjudication.get("decision") != "批准最小替代":
+                problems.append("adjudication record must record decision '批准最小替代'")
+            for key, value in (
+                ("case-id", artifact.get("case-id")),
+                ("artifact-id", artifact.get("artifact-id")),
+                ("actual", artifact.get("generated-by")),
+            ):
+                if adjudication.get(key) != value:
+                    problems.append(f"adjudication record {key} does not match this artifact")
+    retest, retest_problems = _load_ref_json(meta.get("retest"), "meta.retest")
+    problems += retest_problems
+    if retest is not None:
+        for key, value in (
+            ("case-id", artifact.get("case-id")),
+            ("artifact-id", artifact.get("artifact-id")),
+            ("kind", artifact.get("kind")),
+            ("path", artifact.get("path")),
+            ("sha256", artifact.get("sha256")),
+            ("generated-by", artifact.get("generated-by")),
+        ):
+            if retest.get(key) != value:
+                problems.append(f"retest record {key} does not match this artifact")
+        if retest.get("result") != "成功":
+            problems.append("retest result must be 成功")
+        if retest.get("open-check-result") != "成功":
+            problems.append("retest open-check-result must be 成功")
+        problems += _iso8601_problems(retest.get("checked-at"), "retest.checked-at")
+    return problems
