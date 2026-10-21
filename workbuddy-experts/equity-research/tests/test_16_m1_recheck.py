@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import unittest
 
-import _support
 from _support import (
     ACCEPTANCE,
     C4_BLOCK,
@@ -12,26 +11,28 @@ from _support import (
     C4_STATES,
     M1_EARNINGS_CHECKLIST_SIZE,
     M1_INITIATE_STAGES,
-    M1_REQUIRED_ARTIFACTS,
     RepoTest,
-    c4_m1,
+    c4_check_artifact,
+    c4_check_ref,
     nine_view,
     read_json_block,
 )
 from test_13_cr4_evidence import acceptance_table, table_problems
 
 
-def _case_problems(case: dict, label: str) -> list[str]:
+def _case_problems(case: dict, label: str, verify: bool) -> list[str]:
     problems = []
     for key in ("case-id", "language", "market", "session-record", "expected", "actual", "result"):
         if not case.get(key):
             problems.append(f"{label}: missing {key}")
     if case.get("result") not in C4_STATES:
         problems.append(f"{label}: invalid result")
+    if verify and case.get("session-record"):
+        problems += c4_check_ref(case.get("session-record"), f"{label}.session-record")
     return problems
 
 
-def m1_record_problems(row: dict) -> list[str]:
+def m1_record_problems(row: dict, verify: bool = True) -> list[str]:
     problems: list[str] = []
     prior = row.get("prior") or {}
     adjudication = row.get("adjudication") or {}
@@ -44,6 +45,8 @@ def m1_record_problems(row: dict) -> list[str]:
             problems.append(f"{row.get('m1-slot')}: carry-forward requires prior.state=通过")
         if not prior.get("adjudication-ref"):
             problems.append(f"{row.get('m1-slot')}: carry-forward requires prior.adjudication-ref")
+        if not prior.get("evidence-refs"):
+            problems.append(f"{row.get('m1-slot')}: carry-forward requires prior.evidence-refs")
         if row.get("impact") != "unchanged":
             problems.append(f"{row.get('m1-slot')}: carry-forward requires impact=unchanged")
     elif mode == "retest":
@@ -59,30 +62,54 @@ def m1_record_problems(row: dict) -> list[str]:
         return problems
     if not adjudication.get("adjudicator") or not adjudication.get("adjudicated-at"):
         problems.append(f"{row.get('m1-slot')}: missing adjudicator/adjudicated-at")
+    if mode == "carry-forward":
+        return problems
     if not isinstance(retest, dict):
         return problems
     for key in ("positive-cases", "negative-cases", "artifacts", "quality-checklist", "initiate-stages", "replay"):
         if key not in retest:
             problems.append(f"{row.get('m1-slot')}.retest: missing {key}")
     for case in (retest.get("positive-cases") or []) + (retest.get("negative-cases") or []):
-        problems += _case_problems(case, f"{row.get('m1-slot')}.retest.case")
+        problems += _case_problems(case, f"{row.get('m1-slot')}.retest.case", verify)
+        if case.get("result") != "通过":
+            problems.append(f"{row.get('m1-slot')}.retest.case: result must be 通过")
+    for artifact in retest.get("artifacts") or []:
+        if verify:
+            problems += c4_check_artifact(artifact, f"{row.get('m1-slot')}.retest.artifact")
     standards = row.get("original-standard-check") or []
     if not standards:
         problems.append(f"{row.get('m1-slot')}: original-standard-check is empty")
+    for standard in standards:
+        if not all(standard.get(key) for key in ("criterion", "evidence-ref", "result")):
+            problems.append(f"{row.get('m1-slot')}: incomplete original-standard-check row")
     if row.get("m1-slot") == "M1-01":
-        if len(retest.get("quality-checklist") or []) != M1_EARNINGS_CHECKLIST_SIZE:
+        checklist = retest.get("quality-checklist") or []
+        if len(checklist) != M1_EARNINGS_CHECKLIST_SIZE:
             problems.append("M1-01: quality-checklist must contain eight items")
-        if "DOCX" not in {artifact.get("kind") for artifact in retest.get("artifacts") or []}:
-            problems.append("M1-01: DOCX artifact is required")
+        if any(not all(item.get(key) for key in ("item", "result", "evidence-ref")) for item in checklist):
+            problems.append("M1-01: every checklist item needs item/result/evidence-ref")
+        kinds = {artifact.get("kind") for artifact in retest.get("artifacts") or []}
+        if not {"DOCX", "SUMMARY"} <= kinds:
+            problems.append("M1-01: DOCX and SUMMARY artifacts are required")
     if row.get("m1-slot") == "M1-02":
         if retest.get("cross-session") is not None:
             problems.append("M1-02: cross-session must stay null")
+        check = retest.get("model-check") or {}
+        for key in ("original-sha256", "formulas", "changes", "reopen"):
+            if not check.get(key):
+                problems.append(f"M1-02: model-check.{key} is required")
     if row.get("m1-slot") == "M1-03":
-        stages = {stage.get("stage") for stage in retest.get("initiate-stages") or []}
-        if stages != {stage for stage, _ in M1_INITIATE_STAGES}:
+        stages = retest.get("initiate-stages") or []
+        if {stage.get("stage") for stage in stages} != {stage for stage, _ in M1_INITIATE_STAGES}:
             problems.append("M1-03: initiate-stages must cover M1-03-T1..T5 exactly")
-        if not retest.get("cross-session"):
-            problems.append("M1-03: cross-session is required")
+        for stage in stages:
+            for key in ("case-id", "request-summary", "artifact-refs", "result"):
+                if not stage.get(key):
+                    problems.append(f"M1-03.{stage.get('stage')}: missing {key}")
+        cross = retest.get("cross-session") or {}
+        for key in ("reentry-id", "exit-at", "reentry-at", "provided-artifacts", "stage-located", "confirmation", "final-artifact", "result"):
+            if not cross.get(key):
+                problems.append(f"M1-03.cross-session: missing {key}")
     return problems
 
 
@@ -99,8 +126,8 @@ class ContractSelfChecks(unittest.TestCase):
                 "negative-cases": [],
                 "artifacts": [{"kind": "DOCX"}],
                 "quality-checklist": [],
-                "cross-session": {"reentry-id": "r"},
-                "initiate-stages": [{"stage": stage} for stage, _ in M1_INITIATE_STAGES],
+                "cross-session": {key: "x" for key in ("reentry-id", "exit-at", "reentry-at", "provided-artifacts", "stage-located", "confirmation", "final-artifact", "result")},
+                "initiate-stages": [{"stage": stage, "case-id": f"c-{stage}", "request-summary": "r", "artifact-refs": ["a"], "result": "通过"} for stage, _ in M1_INITIATE_STAGES],
                 "replay": [],
             },
             "adjudication": {"state": "通过", "adjudicator": "Ray", "adjudicated-at": "2026-10-21T00:00:00+08:00"},
@@ -108,12 +135,12 @@ class ContractSelfChecks(unittest.TestCase):
 
     def test_m1_gate(self) -> None:
         row = self._passing()
-        self.assertEqual(m1_record_problems(row), [])
-        self.assertTrue(m1_record_problems({**row, "original-standard-check": []}))
-        self.assertTrue(m1_record_problems({**row, "retest": {**row["retest"], "initiate-stages": []}}))
-        forward = {**row, "path-mode": "carry-forward", "prior": {"state": "通过", "adjudication-ref": "x", "evidence-refs": []}, "impact": "unchanged"}
-        self.assertEqual(m1_record_problems(forward), [])
-        self.assertTrue(m1_record_problems({**forward, "prior": {"state": "待测", "adjudication-ref": "x"}}))
+        self.assertEqual(m1_record_problems(row, verify=False), [])
+        self.assertTrue(m1_record_problems({**row, "original-standard-check": []}, verify=False))
+        self.assertTrue(m1_record_problems({**row, "retest": {**row["retest"], "initiate-stages": []}}, verify=False))
+        forward = {**row, "path-mode": "carry-forward", "prior": {"state": "通过", "adjudication-ref": "x", "evidence-refs": ["x"]}, "impact": "unchanged"}
+        self.assertEqual(m1_record_problems(forward, verify=False), [])
+        self.assertTrue(m1_record_problems({**forward, "prior": {"state": "待测", "adjudication-ref": "x"}}, verify=False))
 
 
 class RepositoryContract(RepoTest):
@@ -133,17 +160,15 @@ class RepositoryContract(RepoTest):
             self.assertEqual(row, nine_view(c4, closeout, row.get("task")))
         passed = sum(1 for row in summary if row.get("counts-toward-9"))
         self.assertEqual((closeout.get("count") or {}).get("passed"), passed)
-        if passed == 9:
-            self.assertTrue((closeout.get("closeout") or {}).get("final-wording-allowed"))
-        else:
-            self.assertFalse((closeout.get("closeout") or {}).get("final-wording-allowed"))
+        flags = closeout.get("closeout") or {}
+        allowed = bool(passed == 9 and (flags.get("reinstall") or {}).get("status") == "通过" and (flags.get("readiness") or {}).get("status") == "通过")
+        self.assertEqual(flags.get("final-wording-allowed"), allowed)
+        self.assertEqual(flags.get("final-wording"), "phase-1 本机自用 9/9 完成" if allowed else "")
 
     def test_table_matches_json(self) -> None:
-        c4 = read_json_block(ACCEPTANCE, C4_BLOCK)
         closeout = read_json_block(ACCEPTANCE, C4_CLOSEOUT_BLOCK)
         header, rows = acceptance_table(ACCEPTANCE.read_text(encoding="utf-8"))
         self.assertEqual(table_problems(header, rows, closeout.get("nine-summary") or []), [])
-        self.assertEqual(len(c4.get("m1-recheck") or []), 3)
 
 
 if __name__ == "__main__":

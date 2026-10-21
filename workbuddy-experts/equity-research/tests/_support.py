@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import unittest
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -735,6 +736,21 @@ C4_SCOPE_EXACT_FILES = (
     "workbuddy-experts/equity-research/tests/test_16_m1_recheck.py",
     "workbuddy-experts/equity-research/tests/test_17_reinstall_readiness.py",
 )
+C4_CONDITIONAL_PREFIXES = (
+    "plugins/vertical-plugins/equity-research/skills/idea-generation/",
+    "plugins/vertical-plugins/equity-research/skills/catalyst-calendar/",
+    "plugins/vertical-plugins/equity-research/skills/morning-note/",
+    "plugins/vertical-plugins/equity-research/skills/earnings-preview/",
+    "plugins/vertical-plugins/equity-research/skills/sector-overview/",
+    "plugins/vertical-plugins/equity-research/skills/thesis-tracker/",
+    "plugins/vertical-plugins/equity-research/commands/screen.md",
+    "plugins/vertical-plugins/equity-research/commands/catalysts.md",
+    "plugins/vertical-plugins/equity-research/commands/morning-note.md",
+    "plugins/vertical-plugins/equity-research/commands/earnings-preview.md",
+    "plugins/vertical-plugins/equity-research/commands/sector.md",
+    "plugins/vertical-plugins/equity-research/commands/thesis.md",
+)
+C4_ZIP_KINDS = ("DOCX", "XLSX", "PPTX", "ZIP")
 
 
 def c4_section6_sha256(text: str) -> str:
@@ -775,6 +791,58 @@ def c4_m1(block: dict, m1_slot: str) -> dict:
     return matches[0]
 
 
+def c4_slot_eligible(c4_block: dict, slot_id: str) -> bool:
+    """Common prerequisites plus this slot's own domains/tools/records must all be accepted."""
+    common = (c4_block.get("prerequisites") or {}).get("common") or {}
+    if not all((common.get(key) or {}).get("accepted") is True for key in ("cr1-baseline", "cr2-authorization-framework", "package-baseline")):
+        return False
+    requirement = next(
+        (row for row in ((c4_block.get("prerequisites") or {}).get("slots") or []) if row.get("slot") == slot_id),
+        None,
+    )
+    if requirement is None:
+        return False
+    for key in ("required-domains", "required-tools", "required-records"):
+        for item in requirement.get(key) or []:
+            if item.get("accepted") is not True:
+                return False
+    return True
+
+
+def c4_check_ref(ref: object, label: str) -> list[str]:
+    """Verify a `<path>::<sha256>` evidence reference against the real file."""
+    try:
+        path, digest = split_evidence_ref(str(ref))
+    except AssertionError as exc:
+        return [f"{label}: {exc}"]
+    try:
+        actual = sha256_file(path)
+    except AssertionError as exc:
+        return [f"{label}: {exc}"]
+    if actual != digest:
+        return [f"{label}: sha256 mismatch ({actual} != {digest})"]
+    return []
+
+
+def c4_check_artifact(artifact: dict, label: str) -> list[str]:
+    """Verify a standalone artifact path, size, digest and container structure."""
+    problems: list[str] = []
+    try:
+        path = resolve_evidence_path(str(artifact.get("path") or ""))
+    except AssertionError as exc:
+        return [f"{label}: {exc}"]
+    if not path.is_file():
+        return [f"{label}: missing file {path}"]
+    actual = sha256_file(path)
+    if actual != artifact.get("sha256"):
+        problems.append(f"{label}: sha256 mismatch")
+    if path.stat().st_size != artifact.get("bytes"):
+        problems.append(f"{label}: bytes mismatch")
+    if artifact.get("kind") in C4_ZIP_KINDS and not zipfile.is_zipfile(path):
+        problems.append(f"{label}: {artifact.get('kind')} is not a readable ZIP container")
+    return problems
+
+
 def _c4_adjudication(record: dict) -> tuple[str, str, str]:
     adjudication = record.get("adjudication") or {}
     return (
@@ -791,14 +859,18 @@ def nine_view(c4_block: dict, closeout_block: dict, task: str) -> dict:
     if task in ("earnings", "initiate", "model-update"):
         m1_slot = {"earnings": "M1-01", "model-update": "M1-02", "initiate": "M1-03"}[task]
         record = c4_m1(c4_block, m1_slot)
+        adj_state, adjudicator, adjudicated_at = _c4_adjudication(record)
+        prior = record.get("prior") or {}
         if record.get("path-mode") == "carry-forward":
-            prior = record.get("prior") or {}
-            state = prior.get("state") or ""
-            _, adjudicator, adjudicated_at = _c4_adjudication(record)
+            state = adj_state or (prior.get("state") or "")
+            carry_ok = prior.get("state") == "通过" and bool(prior.get("adjudication-ref"))
         else:
-            state, adjudicator, adjudicated_at = _c4_adjudication(record)
+            state = adj_state
+            carry_ok = True
         package_hash = ((record.get("package-link") or {}).get("content-sha256")) or ""
+        eligible = c4_slot_eligible(c4_block, m1_slot)
         kind, ref = "m1", f"§7/m1-recheck#{m1_slot}"
+        adjudication_ok = adj_state == "通过"
     else:
         slot_id = {
             "screen": "C4-01",
@@ -811,12 +883,19 @@ def nine_view(c4_block: dict, closeout_block: dict, task: str) -> dict:
         record = c4_slot(c4_block, slot_id)
         state, adjudicator, adjudicated_at = _c4_adjudication(record)
         package_hash = ((c4_block.get("package") or {}).get("content-sha256")) or ""
+        eligible = c4_slot_eligible(c4_block, slot_id)
         kind, ref = "c4", f"§7/slots#{slot_id}"
+        carry_ok = True
+        adjudication_ok = state == "通过"
     closeout_hash = ((closeout_block.get("package") or {}).get("content-sha256")) or ""
     counts = bool(
-        state == "通过"
+        adjudication_ok
+        and carry_ok
+        and eligible
+        and state == "通过"
         and adjudicator
         and adjudicated_at
+        and package_hash
         and package_hash == closeout_hash
     )
     return {

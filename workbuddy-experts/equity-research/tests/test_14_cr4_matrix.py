@@ -12,6 +12,7 @@ from _support import (
     C4_SLOTS,
     C4_STATES,
     RepoTest,
+    c4_check_ref,
     c4_slot,
     read_json_block,
     sha256_file,
@@ -39,7 +40,7 @@ LANGUAGES = {"zh-CN", "en-US"}
 MARKETS = {"A股", "港股", "美股公开面"}
 
 
-def _case_problems(case: dict, label: str) -> list[str]:
+def _case_problems(case: dict, label: str, verify: bool = True) -> list[str]:
     problems = []
     if case.get("language") not in LANGUAGES:
         problems.append(f"{label}: language must be zh-CN or en-US")
@@ -49,17 +50,19 @@ def _case_problems(case: dict, label: str) -> list[str]:
         problems.append(f"{label}: invalid result")
     if not case.get("session-record"):
         problems.append(f"{label}: session-record is required")
+    elif verify:
+        problems += c4_check_ref(case.get("session-record"), f"{label}.session-record")
     if not case.get("expected") or not case.get("actual"):
         problems.append(f"{label}: expected/actual are required")
     return problems
 
 
-def slot_matrix_problems(slot: dict) -> list[str]:
+def slot_matrix_problems(slot: dict, verify: bool = True) -> list[str]:
     problems: list[str] = []
     positives = slot.get("positive-cases") or []
     negatives = slot.get("negative-cases") or []
     for case in positives + negatives:
-        problems += _case_problems(case, f"{slot.get('slot')}.case")
+        problems += _case_problems(case, f"{slot.get('slot')}.case", verify)
     if slot.get("research-state") != "通过":
         return problems
     languages = {case.get("language") for case in positives}
@@ -68,6 +71,12 @@ def slot_matrix_problems(slot: dict) -> list[str]:
         problems.append(f"{slot.get('slot')}: 通过 requires zh-CN and en-US positive cases")
     if not {"A股", "港股"} <= markets:
         problems.append(f"{slot.get('slot')}: 通过 requires A股 and 港股 positive cases")
+    if any(case.get("result") != "通过" for case in positives):
+        problems.append(f"{slot.get('slot')}: every positive case must result=通过")
+    if any(case.get("applicable", True) and case.get("result") != "通过" for case in negatives):
+        problems.append(f"{slot.get('slot')}: applicable negative cases must result=通过")
+    if not any(case.get("branch") for case in negatives):
+        problems.append(f"{slot.get('slot')}: 通过 requires at least one failure branch")
     present = {case.get("type") for case in negatives if case.get("applicable", True)}
     for negative_type in REQUIRED_NEGATIVES[slot.get("slot", "")]:
         if negative_type not in present:
@@ -76,6 +85,8 @@ def slot_matrix_problems(slot: dict) -> list[str]:
         if case.get("applicable") is False:
             if not case.get("not-applicable-reason") or not case.get("adjacent-path"):
                 problems.append(f"{slot.get('slot')}: N/A negative lacks reason/adjacent-path")
+    if not (slot.get("mapping-check") or {}).get("result"):
+        problems.append(f"{slot.get('slot')}: mapping-check.result is empty")
     if not (slot.get("adjudication") or {}).get("adjudicator") or not (slot.get("adjudication") or {}).get("adjudicated-at"):
         problems.append(f"{slot.get('slot')}: missing adjudication")
     return problems
@@ -104,6 +115,8 @@ def collection_problems(c4: dict) -> list[str]:
         case = us_cases[0]
         if case.get("market") != "美股公开面":
             problems.append("C4-US-01 must be 美股公开面")
+        if case.get("result") != "通过":
+            problems.append("C4-US-01 must be an actual positive case")
         if "不接入美系机构数据源" not in (case.get("response-summary") or ""):
             problems.append("C4-US-01 must declare public-only US coverage")
     seen = set()
@@ -123,29 +136,32 @@ class ContractSelfChecks(unittest.TestCase):
             "acceptance-slot": "SLOT-04",
             "research-state": "通过",
             "adjudication": {"state": "通过", "adjudicator": "Ray", "adjudicated-at": "2026-10-21T00:00:00+08:00"},
+            "mapping-check": {"row": "MR-04", "result": "通过", "notes": ""},
             "positive-cases": [
                 {"case-id": "c1", "language": "zh-CN", "market": "A股", "result": "通过", "session-record": "out/evidence/cr4/a.json::" + "a" * 64, "expected": "x", "actual": "x"},
                 {"case-id": "c2", "language": "en-US", "market": "港股", "result": "通过", "session-record": "out/evidence/cr4/b.json::" + "b" * 64, "expected": "x", "actual": "x"},
             ],
             "negative-cases": [
-                {"case-id": "n1", "type": negative, "language": "zh-CN", "market": "A股", "result": "通过", "session-record": "out/evidence/cr4/n.json::" + "c" * 64, "expected": "x", "actual": "x"}
+                {"case-id": "n1", "type": negative, "branch": BRANCHES[0], "language": "zh-CN", "market": "A股", "result": "通过", "session-record": "out/evidence/cr4/n.json::" + "c" * 64, "expected": "x", "actual": "x"}
                 for negative in REQUIRED_NEGATIVES["C4-01"]
             ],
         }
 
     def test_slot_matrix_gate(self) -> None:
         slot = self._passing_slot()
-        self.assertEqual(slot_matrix_problems(slot), [])
-        self.assertTrue(slot_matrix_problems({**slot, "positive-cases": slot["positive-cases"][:1]}))
-        self.assertTrue(slot_matrix_problems({**slot, "negative-cases": slot["negative-cases"][:2]}))
-        self.assertTrue(slot_matrix_problems({**slot, "adjudication": {"state": "通过"}}))
+        self.assertEqual(slot_matrix_problems(slot, verify=False), [])
+        self.assertTrue(slot_matrix_problems({**slot, "positive-cases": slot["positive-cases"][:1]}, verify=False))
+        self.assertTrue(slot_matrix_problems({**slot, "negative-cases": slot["negative-cases"][:2]}, verify=False))
+        self.assertTrue(slot_matrix_problems({**slot, "adjudication": {"state": "通过"}}, verify=False))
+        self.assertTrue(slot_matrix_problems({**slot, "mapping-check": {"result": ""}}, verify=False))
+        failing = {**slot["positive-cases"][0], "result": "不通过"}
+        self.assertTrue(slot_matrix_problems({**slot, "positive-cases": [failing]}, verify=False))
 
     def test_collection_branch_and_us_gate(self) -> None:
         slot = self._passing_slot()
-        slot["negative-cases"][0]["branch"] = BRANCHES[0]
         c4 = {"slots": [slot] * 6, "cross-slot-cases": []}
         self.assertTrue(collection_problems(c4))
-        c4["cross-slot-cases"] = [{"case-id": "C4-US-01", "market": "美股公开面", "response-summary": "仅公开面，不接入美系机构数据源"}]
+        c4["cross-slot-cases"] = [{"case-id": "C4-US-01", "market": "美股公开面", "result": "通过", "response-summary": "仅公开面，不接入美系机构数据源"}]
         self.assertTrue(collection_problems(c4))
 
 

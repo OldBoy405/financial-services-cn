@@ -1092,7 +1092,17 @@ def skills_for_path(path: str) -> set[str]:
         "CUSTOM.md",
     )
     if path in shared:
-        return {"earnings-analysis", "model-update", "initiating-coverage"}
+        return {
+            "earnings-analysis",
+            "model-update",
+            "initiating-coverage",
+            "idea-generation",
+            "catalyst-calendar",
+            "morning-note",
+            "earnings-preview",
+            "sector-overview",
+            "thesis-tracker",
+        }
     return set()
 
 
@@ -1166,7 +1176,7 @@ def scope_problems(changed: list[str], block: dict, current_block: dict | None =
             continue
         if path in exact:
             continue
-        if not any(_path_matches(path, prefix) for prefix in M1_SCOPE_CONDITIONAL_PREFIXES):
+        if not any(_path_matches(path, prefix) for prefix in M1_SCOPE_CONDITIONAL_PREFIXES + _support.C4_CONDITIONAL_PREFIXES):
             problems.append(f"{path}: outside the SDD §9 scope_in")
             continue
         skills = skills_for_path(path)
@@ -1882,6 +1892,35 @@ class ContractSelfChecks(unittest.TestCase):
             )
         )
 
+    def test_current_cr4_scope_layer(self) -> None:
+        target = "plugins/vertical-plugins/equity-research/skills/idea-generation/SKILL.md"
+        historical = {"slots": []}
+        current = {
+            "slots": [{
+                "slot": "C4-01",
+                "skill": "idea-generation",
+                "positive-cases": [{"case-id": "C4-01-P1"}],
+                "negative-cases": [],
+                "artifacts": [],
+                "skill-change": {"changed": True, "case-id": "C4-01-P1", "source-paths": [target], "copy-paths": []},
+            }],
+            "m1-recheck": [],
+        }
+        self.assertEqual(scope_problems([target], historical, current), [])
+        unregistered = json.loads(json.dumps(current))
+        unregistered["slots"][0]["skill-change"] = {"changed": False}
+        self.assertTrue(scope_problems([target], historical, unregistered))
+        manifest = "workbuddy-experts/equity-research/.codebuddy-plugin/plugin.json"
+        shared = json.loads(json.dumps(current))
+        shared["slots"][0]["skill-change"] = {
+            "changed": True,
+            "case-id": "C4-01-P1",
+            "source-paths": [manifest],
+            "copy-paths": [],
+            "versions": {manifest: "0.13.0"},
+        }
+        self.assertEqual(scope_problems([manifest], historical, shared), [])
+
     def test_acceptance_append_is_pure(self) -> None:
         baseline = ACCEPTANCE.read_text(encoding="utf-8")
         lines = baseline.split("\n")
@@ -1967,19 +2006,29 @@ class RepositoryContract(RepoTest):
         block = load_block()
         changed = changed_paths()
         self.assertTrue(changed, "no diff against the fixed baseline: nothing to review")
-        self.assertEqual(scope_problems(changed, block, _support.read_json_block(_support.ACCEPTANCE, _support.C4_BLOCK)), [])
+        current = _support.read_json_block(_support.ACCEPTANCE, _support.C4_BLOCK)
+        self.assertEqual(scope_problems(changed, block, current), [])
         conditional = [path for path in changed if skills_for_path(path)]
         affected = set()
         versions: dict[str, str] = {}
         allowed_paths: set[str] = set()
-        for slot in block.get("slots") or []:
-            record = slot.get("skill-change") if isinstance(slot.get("skill-change"), dict) else {}
-            if record.get("changed") is True:
-                affected.add(slot.get("skill"))
-                allowed_paths.update(record.get("source-paths") or [])
-                allowed_paths.update(record.get("copy-paths") or [])
-                if isinstance(record.get("versions"), dict):
-                    versions.update(record["versions"])
+        for source in (block, current):
+            for slot in source.get("slots") or []:
+                record = slot.get("skill-change") if isinstance(slot.get("skill-change"), dict) else {}
+                if record.get("changed") is True:
+                    affected.add(slot.get("skill"))
+                    allowed_paths.update(record.get("source-paths") or [])
+                    allowed_paths.update(record.get("copy-paths") or [])
+                    if isinstance(record.get("versions"), dict):
+                        versions.update(record["versions"])
+            for row in source.get("m1-recheck") or []:
+                record = row.get("skill-change") if isinstance(row.get("skill-change"), dict) else {}
+                if record.get("changed") is True:
+                    affected.add(row.get("skill"))
+                    allowed_paths.update(record.get("source-paths") or [])
+                    allowed_paths.update(record.get("copy-paths") or [])
+                    if isinstance(record.get("versions"), dict):
+                        versions.update(record["versions"])
         for path in conditional:
             before, after = full_context_pair(controlled_diff(path, 999999), (_support.ROOT / path).read_text(encoding="utf-8"))
             self.assertEqual(
