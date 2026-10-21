@@ -155,13 +155,16 @@ def index_problems(c4: dict, closeout: dict, acceptance_text: str) -> list[str]:
     common = (c4.get("prerequisites") or {}).get("common") or {}
     if set(common) != set(COMMON_KEYS):
         problems.append("§7 prerequisites.common is incomplete")
+    for key, item in common.items():
+        problems += _keys_problems(item, PREREQ_ITEM_KEYS, f"prerequisites.common.{key}")
     slot_reqs = (c4.get("prerequisites") or {}).get("slots") or []
     if [row.get("slot") for row in slot_reqs] != [row[0] for row in C4_SLOTS] + [row[0] for row in C4_M1_SLOTS]:
         problems.append("§7 prerequisites.slots is not the nine task rows in order")
     for row in slot_reqs:
         slot_id = row.get("slot")
         problems += _keys_problems(row, PREREQ_SLOT_KEYS, f"prerequisites.{slot_id}")
-        expected = C4_REQUIRED_DEPENDENCIES.get(slot_id)
+        slot = next((s for s in c4.get("slots") or [] if s.get("slot") == slot_id), None)
+        expected = _support.c4_required_dependencies(slot_id, slot)
         if expected is None:
             problems.append(f"prerequisites.{slot_id}: unknown slot")
             continue
@@ -343,6 +346,77 @@ class ContractSelfChecks(unittest.TestCase):
         requirement["required-domains"] = [{"id": item, "accepted": True} for item in domains]
         requirement["required-records"] = []
         self.assertFalse(c4_slot_eligible(c4, "C4-06"))
+
+    def test_conditional_dependencies_follow_actual_artifacts_and_citations(self) -> None:
+        c4, _ = load_blocks()
+        for item in c4["prerequisites"]["common"].values():
+            item["accepted"] = True
+        for slot_id in ("C4-03", "C4-04", "C4-06"):
+            with self.subTest(slot=slot_id):
+                slot = c4_slot(c4, slot_id)
+                slot["artifacts"] = [{"kind": "DOCX"}]
+                req = next(row for row in c4["prerequisites"]["slots"] if row["slot"] == slot_id)
+                if slot_id == "C4-03":
+                    req["required-domains"] = [r for r in req["required-domains"] if r["id"] != "资金/龙虎榜/两融"]
+                req["required-tools"] = [{"capability": "docx-output", "accepted": True}]
+                for item in req["required-domains"] + req["required-records"]:
+                    item["accepted"] = True
+                self.assertTrue(c4_slot_eligible(c4, slot_id))
+                req["required-tools"] = []
+                self.assertFalse(c4_slot_eligible(c4, slot_id))
+                slot["artifacts"] = [{"kind": "MD"}]
+                self.assertTrue(c4_slot_eligible(c4, slot_id))
+        morning = c4_slot(c4, "C4-03")
+        morning["artifacts"][0]["meta"] = {"referenced-domains": ["资金/龙虎榜/两融"]}
+        self.assertFalse(c4_slot_eligible(c4, "C4-03"))
+        # Missing consensus is local to C4-04, not the unrelated morning note.
+        morning["artifacts"][0]["meta"] = {}
+        morning["negative-cases"] = [{"input-summary": "资金域无权限，未引用"}]
+        self.assertTrue(c4_slot_eligible(c4, "C4-03"))
+        next(r for r in c4["prerequisites"]["slots"] if r["slot"] == "C4-04")["required-domains"] = []
+        self.assertTrue(c4_slot_eligible(c4, "C4-03"))
+        self.assertFalse(c4_slot_eligible(c4, "C4-04"))
+
+    def test_conditional_docx_passes_index_eligibility_and_tool_entry_together(self) -> None:
+        import zipfile
+        from unittest.mock import patch
+        from test_15_cr4_artifacts import requirement_problems
+        with tempfile.TemporaryDirectory() as tmp, patch.object(_support, "ROOT", Path(tmp)):
+            base = Path(tmp) / "out/evidence/cr4"
+            base.mkdir(parents=True)
+            path = base / "fixture.docx"
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr("[Content_Types].xml", "<Types/>")
+                archive.writestr("word/document.xml", "<document/>")
+            call = base / "call.json"
+            call.write_text('{"fixture": true, "result": "通过"}', encoding="utf-8")
+            ref = "out/evidence/cr4/call.json::" + hashlib.sha256(call.read_bytes()).hexdigest()
+            for slot_id in ("C4-03", "C4-04", "C4-06"):
+                c4, closeout = load_blocks()
+                for item in c4["prerequisites"]["common"].values():
+                    item["accepted"] = True
+                slot = c4_slot(c4, slot_id)
+                slot["artifacts"] = [{"kind": "DOCX", "path": "out/evidence/cr4/fixture.docx", "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "bytes": path.stat().st_size, "deviations": []}]
+                req = next(r for r in c4["prerequisites"]["slots"] if r["slot"] == slot_id)
+                for item in req["required-domains"] + req["required-records"]:
+                    item["accepted"] = True
+                req["required-tools"] = [{"capability": "docx-output", "allowed-routes": ["docx"], "selected-route": "docx", "selected-tool": "tencent-docx", "accepted": True, "evidence-ref": ref}]
+                self.assertTrue(c4_slot_eligible(c4, slot_id))
+                self.assertEqual(index_problems(c4, closeout, ACCEPTANCE.read_text(encoding="utf-8")), [])
+                self.assertEqual(requirement_problems(req, slot), [])
+                req["required-tools"] = []
+                self.assertFalse(c4_slot_eligible(c4, slot_id))
+                self.assertTrue(requirement_problems(req, slot))
+                self.assertTrue(any("required-tools differ" in p for p in index_problems(c4, closeout, ACCEPTANCE.read_text(encoding="utf-8"))))
+
+    def test_common_whitelist_is_reached_from_index_entry(self) -> None:
+        c4, closeout = load_blocks()
+        text = ACCEPTANCE.read_text(encoding="utf-8")
+        self.assertEqual(index_problems(c4, closeout, text), [])
+        for key in COMMON_KEYS:
+            mutated = json.loads(json.dumps(c4))
+            mutated["prerequisites"]["common"][key]["raw-session"] = "synthetic restricted body"
+            self.assertTrue(any("undeclared field 'raw-session'" in p for p in index_problems(mutated, closeout, text)))
 
     def test_nested_scan_is_reached_from_index_entry(self) -> None:
         c4, closeout = load_blocks()

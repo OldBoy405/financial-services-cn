@@ -1,8 +1,19 @@
 """cmd-04 — M1 recheck paths, original standards and the 9/9 view (FR-11/FR-14)."""
 from __future__ import annotations
 
+import copy
+import hashlib
+import json
+import posixpath
+import tempfile
 import unittest
+import xml.etree.ElementTree as ET
+import zipfile
+from pathlib import Path
+from unittest.mock import patch
 
+import _support
+from test_10_m1_model_update import CHANGELOG_HEADER, changelog_problems, model_route_problems, open_check_problems, xlsx_problems
 from _support import (
     ACCEPTANCE,
     C4_BLOCK,
@@ -29,6 +40,104 @@ def _case_problems(case: dict, label: str, verify: bool) -> list[str]:
         problems.append(f"{label}: invalid result")
     if verify and case.get("session-record"):
         problems += c4_check_ref(case.get("session-record"), f"{label}.session-record")
+    return problems
+
+
+def _workbook_cells(path: Path) -> dict[tuple[str, str], tuple[str, str]]:
+    """Read declared worksheet cells/formulas/cached results without recalculating them."""
+    ns = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    rel_ns = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+    cells = {}
+    with zipfile.ZipFile(path) as archive:
+        workbook = ET.fromstring(archive.read("xl/workbook.xml"))
+        rels = {r.get("Id"): r.get("Target", "") for r in ET.fromstring(archive.read("xl/_rels/workbook.xml.rels"))}
+        strings = []
+        if "xl/sharedStrings.xml" in archive.namelist():
+            strings = ["".join(item.itertext()) for item in ET.fromstring(archive.read("xl/sharedStrings.xml"))]
+        for sheet in workbook.iter(f"{ns}sheet"):
+            target = rels[sheet.get(f"{rel_ns}id")]
+            member = target.lstrip("/") if target.startswith("/") else posixpath.normpath("xl/" + target)
+            for cell in ET.fromstring(archive.read(member)).iter(f"{ns}c"):
+                formula = cell.find(f"{ns}f")
+                cached = cell.findtext(f"{ns}v", "")
+                if cell.get("t") == "s":
+                    cached = strings[int(cached)]
+                elif cell.get("t") == "inlineStr":
+                    cached = "".join(t.text or "" for t in cell.iter(f"{ns}t"))
+                value = "=" + (formula.text or "") if formula is not None else cached
+                if value:
+                    cells[(sheet.get("name"), cell.get("r"))] = (value, cached)
+    return cells
+
+
+def _model_problems(retest: dict, verify: bool) -> list[str]:
+    problems = []
+    for name in ("positive-cases", "negative-cases"):
+        if not retest.get(name):
+            problems.append(f"M1-02: {name} must not be empty")
+    if not {"zh-CN", "en-US"} <= {case.get("language") for case in retest.get("positive-cases") or []}:
+        problems.append("M1-02: original standard requires CN and EN positive cases")
+    artifacts = retest.get("artifacts") or []
+    models = {}
+    for kind in ("MODEL-COPY", "XLSX", "CHANGELOG"):
+        matches = [a for a in artifacts if a.get("kind") == kind]
+        if len(matches) != 1:
+            problems.append(f"M1-02: exactly one {kind} artifact is required")
+        else:
+            models[kind] = matches[0]
+    if len(models) != 3:
+        return problems
+    original, updated, log = (models[k] for k in ("MODEL-COPY", "XLSX", "CHANGELOG"))
+    check = retest.get("model-check") or {}
+    if original.get("path") == updated.get("path"):
+        problems.append("M1-02: original and updated models must be independent files")
+    for field, artifact in (("original-sha256", original), ("updated-sha256", updated)):
+        if check.get(field) != artifact.get("sha256"):
+            problems.append(f"M1-02: {field} must match its model artifact")
+    case_ids = {c.get("case-id") for c in retest.get("positive-cases") or []}
+    if any(a.get("case-id") not in case_ids for a in models.values()):
+        problems.append("M1-02: model/log artifacts must link to a positive case")
+    if not verify:
+        return problems
+    for artifact in (original, updated):
+        problems += model_route_problems(artifact)
+    problems += open_check_problems(updated, True)
+    problems += xlsx_problems(updated, original.get("sha256"))
+    try:
+        before = _workbook_cells(_support.resolve_evidence_path(original.get("path")))
+        after = _workbook_cells(_support.resolve_evidence_path(updated.get("path")))
+        actual_changes = [{"sheet": sheet, "cell": cell, "before": before.get((sheet, cell), ("", ""))[0], "after": after.get((sheet, cell), ("", ""))[0]} for sheet, cell in sorted(set(before) | set(after)) if before.get((sheet, cell), ("", ""))[0] != after.get((sheet, cell), ("", ""))[0]]
+        if not actual_changes or check.get("changes") != actual_changes:
+            problems.append("M1-02: changes must match the actual per-cell model diff")
+        formula_count = sum(value.startswith("=") for value, _ in after.values())
+        if formula_count <= 0 or check.get("formulas") != formula_count:
+            problems.append("M1-02: formulas must match actual live model formulas")
+        text = _support.resolve_evidence_path(log.get("path")).read_text(encoding="utf-8")
+        problems += changelog_problems(text)
+        rows = [[c.strip() for c in line.strip().strip("|").split("|")] for line in text.splitlines() if line.strip().startswith("|") and line.strip() != CHANGELOG_HEADER and not set(line.strip()) <= set("|:- ")]
+        if sorted(row[:4] for row in rows) != sorted([c["sheet"], c["cell"], c["before"], c["after"]] for c in actual_changes):
+            problems.append("M1-02: CHANGELOG must cover the actual per-cell changes")
+        ref = updated.get("meta", {}).get("verification-ref")
+        ref_problems = c4_check_ref(ref, "M1-02.model-verification")
+        problems += ref_problems
+        if not ref_problems:
+            receipt_path, _ = _support.split_evidence_ref(ref)
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            expected = {"original-before-sha256": original.get("sha256"), "original-after-sha256": original.get("sha256"), "updated-sha256": updated.get("sha256"), "reopen": "通过", "recalculate": "通过"}
+            if not isinstance(receipt, dict) or any(receipt.get(k) != v for k, v in expected.items()):
+                problems.append("M1-02: original protection/reopen/recalculation receipt does not match the models")
+            else:
+                samples = receipt.get("samples") or []
+                if not samples or samples != updated.get("meta", {}).get("samples"):
+                    problems.append("M1-02: model-bound recalculation samples are required")
+                for sample in samples:
+                    location = str(sample.get("location") or "")
+                    sheet, _, cell = location.rpartition("!")
+                    actual = after.get((sheet, cell), ("", ""))[1]
+                    if not actual or sample.get("expected") != actual or sample.get("actual") != actual or sample.get("result") != "通过":
+                        problems.append("M1-02: sample must reconcile with the reopened model cell")
+    except (OSError, ValueError, KeyError, IndexError, AssertionError, zipfile.BadZipFile, ET.ParseError) as exc:
+        problems.append(f"M1-02: unreadable model/log/verification evidence: {exc}")
     return problems
 
 
@@ -121,6 +230,7 @@ def m1_record_problems(row: dict, verify: bool = True) -> list[str]:
             problems.append("M1-02: changes must be a non-empty list")
         if check.get("reopen") != "通过":
             problems.append("M1-02: reopen must be 通过")
+        problems += _model_problems(retest, verify)
     if row.get("m1-slot") == "M1-03":
         stages = retest.get("initiate-stages") or []
         if {stage.get("stage") for stage in stages} != {stage for stage, _ in M1_INITIATE_STAGES}:
@@ -170,8 +280,118 @@ class ContractSelfChecks(unittest.TestCase):
                 "initiate-stages": [{"stage": stage, "case-id": f"c-{stage}", "request-summary": "r", "artifact-refs": ["a"], "result": "通过"} for stage, _ in M1_INITIATE_STAGES],
                 "replay": [],
             },
-            "adjudication": {"state": "通过", "adjudicator": "Ray", "adjudicated-at": "2026-10-21T00:00:00+08:00"},
+            "adjudication": {"state": "通过", "adjudicator": "synthetic-fixture", "adjudicated-at": "2026-10-21T00:00:00+08:00"},
         }
+
+    def test_m1_02_cannot_pass_on_self_report_without_models(self) -> None:
+        row = self._passing()
+        row["m1-slot"] = "M1-02"
+        row["retest"].update({
+            "positive-cases": [], "negative-cases": [], "artifacts": [], "cross-session": None,
+            "model-check": {"original-sha256": "0" * 64, "updated-sha256": "1" * 64, "formulas": 1, "changes": ["A1"], "reopen": "通过"},
+        })
+        # A real, hash-checked standard receipt isolates the missing-model gap.
+        import hashlib
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        import _support
+        with tempfile.TemporaryDirectory() as tmp, patch.object(_support, "ROOT", Path(tmp)):
+            target = Path(tmp) / "out/evidence/cr4/standard.json"
+            target.parent.mkdir(parents=True)
+            target.write_text('{"fixture": true}', encoding="utf-8")
+            row["original-standard-check"][0]["evidence-ref"] = "out/evidence/cr4/standard.json::" + hashlib.sha256(target.read_bytes()).hexdigest()
+            self.assertTrue(m1_record_problems(row))
+
+    def _model_fixture(self, root: Path, live_formula: bool = True) -> dict:
+        """Small synthetic OOXML files; not Ray's research or an adjudication."""
+        base = root / "out/evidence/cr4"
+        base.mkdir(parents=True, exist_ok=True)
+        ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+        for name, value, cached in (("original.xlsx", "1", "2"), ("updated.xlsx", "2", "4")):
+            formula = "<f>A1*2</f>" if name == "original.xlsx" or live_formula else ""
+            with zipfile.ZipFile(base / name, "w") as archive:
+                archive.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
+                archive.writestr("xl/workbook.xml", f'<workbook xmlns="{ns}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Model" sheetId="1" r:id="rId1"/></sheets></workbook>')
+                archive.writestr("xl/_rels/workbook.xml.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/></Relationships>')
+                archive.writestr("xl/worksheets/sheet1.xml", f'<worksheet xmlns="{ns}"><sheetData><row r="1"><c r="A1"><v>{value}</v></c><c r="B1">{formula}<v>{cached}</v></c></row></sheetData></worksheet>')
+        (base / "changes.md").write_text(CHANGELOG_HEADER + "\n|---|---|---|---|---|---|---|\n| Model | A1 | 1 | 2 | fixture assumption | fixture period | fixture change |\n", encoding="utf-8")
+        (base / "session.json").write_text('{"fixture": true}', encoding="utf-8")
+        def digest(name):
+            return hashlib.sha256((base / name).read_bytes()).hexdigest()
+        def ref(name):
+            return f"out/evidence/cr4/{name}::{digest(name)}"
+        samples = [{"location": "Model!B1", "expected": "4", "actual": "4", "result": "通过"}]
+        receipt = {"original-before-sha256": digest("original.xlsx"), "original-after-sha256": digest("original.xlsx"), "updated-sha256": digest("updated.xlsx"), "reopen": "通过", "recalculate": "通过", "samples": samples}
+        (base / "verification.json").write_text(json.dumps(receipt), encoding="utf-8")
+        artifacts = []
+        for kind, name in (("MODEL-COPY", "original.xlsx"), ("XLSX", "updated.xlsx"), ("CHANGELOG", "changes.md")):
+            artifacts.append({
+                "artifact-id": name, "case-id": "cn", "kind": kind, "path": f"out/evidence/cr4/{name}", "sha256": digest(name), "bytes": (base / name).stat().st_size,
+                "generated-by": "tencent-docs-sheetagent|fixture|tencent-docs-sheetagent",
+                "open-check": {"host": "fixture", "at": "2026-10-21T00:00:00+08:00", "result": "成功"}, "content-check": "fixture",
+                "structural": {"type": "xlsx", "ok": True, "detail": "fixture"},
+                "meta": {"schema-query": "sheet.update", "tool-result": "成功", "table-route": "existing", "sheets": ["Model"], "formula-cells": 1, "samples": samples, "verification-ref": ref("verification.json")}, "deviations": [],
+            })
+        row = self._passing()
+        row["m1-slot"] = "M1-02"
+        row["adjudication"]["adjudicator"] = "synthetic-fixture"
+        row["original-standard-check"] = [{"criterion": "model standard fixture", "evidence-ref": ref("session.json"), "result": "通过"}]
+        def case(case_id, language):
+            return {"case-id": case_id, "language": language, "market": "A股", "session-record": ref("session.json"), "expected": "fixture", "actual": "fixture", "result": "通过"}
+        row["retest"].update({
+            "positive-cases": [case("cn", "zh-CN"), case("en", "en-US")],
+            "negative-cases": [{**case("negative", "zh-CN"), "type": "missing-prior-version"}], "artifacts": artifacts, "cross-session": None,
+            "model-check": {"original-sha256": digest("original.xlsx"), "updated-sha256": digest("updated.xlsx"), "formulas": 1, "changes": [{"sheet": "Model", "cell": "A1", "before": "1", "after": "2"}], "reopen": "通过"},
+        })
+        return row
+
+    def test_m1_02_reads_models_log_and_bound_reopen_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.object(_support, "ROOT", Path(tmp)):
+            row = self._model_fixture(Path(tmp))
+            self.assertEqual(m1_record_problems(row), [])
+            mutations = (
+                ("positive-cases", []), ("negative-cases", []), ("artifacts", []),
+                ("model-check", {**row["retest"]["model-check"], "formulas": 9}),
+                ("model-check", {**row["retest"]["model-check"], "changes": ["A1"]}),
+                ("model-check", {**row["retest"]["model-check"], "original-sha256": "0" * 64}),
+            )
+            for key, value in mutations:
+                bad = copy.deepcopy(row)
+                bad["retest"][key] = value
+                self.assertTrue(m1_record_problems(bad), key)
+            for kind in ("MODEL-COPY", "XLSX", "CHANGELOG"):
+                bad = copy.deepcopy(row)
+                bad["retest"]["artifacts"] = [a for a in bad["retest"]["artifacts"] if a["kind"] != kind]
+                self.assertTrue(m1_record_problems(bad), kind)
+            for index in (0, 1, 2):
+                bad = copy.deepcopy(row)
+                bad["retest"]["artifacts"][index]["path"] = "out/evidence/cr4/missing"
+                self.assertTrue(m1_record_problems(bad), index)
+                bad = copy.deepcopy(row)
+                bad["retest"]["artifacts"][index]["sha256"] = "0" * 64
+                self.assertTrue(m1_record_problems(bad), index)
+            bad = copy.deepcopy(row)
+            bad["retest"]["artifacts"][1]["meta"]["verification-ref"] = "out/evidence/cr4/missing.json::" + "0" * 64
+            self.assertTrue(m1_record_problems(bad))
+            receipt_path = Path(tmp) / "out/evidence/cr4/verification.json"
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            for field, value in (("updated-sha256", "0" * 64), ("original-after-sha256", "0" * 64), ("reopen", "失败"), ("recalculate", "失败"), ("samples", [])):
+                changed = {**receipt, field: value}
+                receipt_path.write_text(json.dumps(changed), encoding="utf-8")
+                bad = copy.deepcopy(row)
+                bad["retest"]["artifacts"][1]["meta"]["verification-ref"] = "out/evidence/cr4/verification.json::" + hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+                self.assertTrue(m1_record_problems(bad), field)
+            changed = copy.deepcopy(receipt)
+            changed["samples"][0]["actual"] = "999"
+            changed["samples"][0]["expected"] = "999"
+            receipt_path.write_text(json.dumps(changed), encoding="utf-8")
+            bad = copy.deepcopy(row)
+            bad["retest"]["artifacts"][1]["meta"]["samples"] = changed["samples"]
+            bad["retest"]["artifacts"][1]["meta"]["verification-ref"] = "out/evidence/cr4/verification.json::" + hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+            self.assertTrue(any("reconcile" in p for p in m1_record_problems(bad)))
+            no_formula = self._model_fixture(Path(tmp), live_formula=False)
+            self.assertTrue(any("formula" in p for p in m1_record_problems(no_formula)))
 
     def test_m1_gate(self) -> None:
         row = self._passing()

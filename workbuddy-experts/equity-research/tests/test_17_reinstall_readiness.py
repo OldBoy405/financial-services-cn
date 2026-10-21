@@ -1,8 +1,16 @@
 """cmd-05 — reinstall and release-readiness receipts (FR-12/FR-13)."""
 from __future__ import annotations
 
+import copy
+import hashlib
+import json
 import re
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import _support
 
 from _support import ACCEPTANCE, C4_CLOSEOUT_BLOCK, RepoTest, c4_check_ref, read_json_block
 
@@ -10,6 +18,44 @@ RIN_IDS = tuple(f"RIN-C4-{index:02d}" for index in range(1, 9))
 RDY_IDS = tuple(f"RDY-C4-{index:02d}" for index in range(1, 8))
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 GOOD_CONCLUSIONS = {"通过", "无", "无阻塞", "不适用"}
+
+
+def _session_problems(session: dict, include_connectors: bool, verify: bool) -> list[str]:
+    problems = []
+    expected = {"routes": dict(_support.NINE_PAIRS)}
+    if include_connectors:
+        connectors = json.loads(_support.MANIFEST.read_text(encoding="utf-8"))["dependencies"]["connectors"]
+        expected["connectors"] = dict.fromkeys(connectors)
+    for kind, identities in expected.items():
+        entries = session.get(kind) or []
+        key = "connector" if kind == "connectors" else "route"
+        if any(not isinstance(entry, dict) for entry in entries):
+            problems.append(f"new-session.{kind}: per-item receipts are required")
+            continue
+        if len(entries) != len(identities) or {entry.get(key) for entry in entries} != set(identities):
+            problems.append(f"new-session.{kind}: must cover each declared identity exactly once")
+        for entry in entries:
+            label = f"new-session.{kind}.{entry.get(key)}"
+            if entry.get("result") != "通过":
+                problems.append(f"{label}: result must be 通过")
+            if kind == "routes" and entry.get("skill") != identities.get(entry.get(key)):
+                problems.append(f"{label}: wrong selected skill")
+            ref = entry.get("evidence-ref")
+            if not ref:
+                problems.append(f"{label}: evidence-ref is required")
+            elif verify:
+                ref_problems = c4_check_ref(ref, label)
+                problems += ref_problems
+                if not ref_problems:
+                    try:
+                        path, _ = _support.split_evidence_ref(ref)
+                        receipt = json.loads(path.read_text(encoding="utf-8"))
+                        fields = (key, "result", "skill") if kind == "routes" else (key, "result")
+                        if not isinstance(receipt, dict) or any(receipt.get(field) != entry.get(field) for field in fields):
+                            problems.append(f"{label}: receipt identity/result differs from the item")
+                    except (ValueError, OSError):
+                        problems.append(f"{label}: receipt must be readable JSON")
+    return problems
 
 
 def _step_problems(step: dict, label: str, package_hash: str, verify: bool = True) -> list[str]:
@@ -50,13 +96,7 @@ def _step_problems(step: dict, label: str, package_hash: str, verify: bool = Tru
     if verify and step.get("evidence-ref"):
         problems += c4_check_ref(step.get("evidence-ref"), f"{label}.evidence-ref")
     if step.get("rin-id") in ("RIN-C4-06", "RIN-C4-07"):
-        session = step.get("new-session") or {}
-        connectors = session.get("connectors") or []
-        routes = session.get("routes") or []
-        if step.get("rin-id") == "RIN-C4-06" and len(connectors) != 4:
-            problems.append("RIN-C4-06: four declared connectors are required")
-        if len(routes) != 9:
-            problems.append(f"{step.get('rin-id')}: nine route receipts are required")
+        problems += _session_problems(step.get("new-session") or {}, step.get("rin-id") == "RIN-C4-06", verify)
     return problems
 
 
@@ -69,8 +109,6 @@ def _item_problems(item: dict, label: str, verify: bool = True) -> list[str]:
         problems.append(f"{label}: conclusion must be an explicit non-blocking result")
     if str(item.get("blocking-scope") or "").lower() not in ("", "none", "无"):
         problems.append(f"{label}: blocking-scope must be empty when readiness passes")
-    if item.get("rdy-id") == "RDY-C4-04" and "阻塞" in str(item.get("conclusion") or ""):
-        problems.append(f"{label}: local license blocker cannot be readiness=通过")
     if verify and item.get("evidence-ref"):
         problems += c4_check_ref(item.get("evidence-ref"), f"{label}.evidence-ref")
     return problems
@@ -91,6 +129,8 @@ def closeout_problems(closeout: dict, verify: bool = True) -> list[str]:
             problems += _step_problems(step, f"reinstall.{step.get('rin-id')}", package_hash, verify)
         if not reinstall.get("evidence-ref"):
             problems.append("reinstall.evidence-ref is required when status=通过")
+        elif verify:
+            problems += c4_check_ref(reinstall["evidence-ref"], "reinstall.evidence-ref")
     if readiness.get("status") == "通过":
         if [item.get("rdy-id") for item in items] != list(RDY_IDS):
             problems.append("readiness.items must be RDY-C4-01..07 in order")
@@ -98,6 +138,8 @@ def closeout_problems(closeout: dict, verify: bool = True) -> list[str]:
             problems += _item_problems(item, f"readiness.{item.get('rdy-id')}", verify)
         if not readiness.get("evidence-ref"):
             problems.append("readiness.evidence-ref is required when status=通过")
+        elif verify:
+            problems += c4_check_ref(readiness["evidence-ref"], "readiness.evidence-ref")
     count = closeout.get("count") or {}
     allowed = bool(count.get("passed") == 9 and reinstall.get("status") == "通过" and readiness.get("status") == "通过")
     if closeout_block.get("final-wording-allowed") != allowed:
@@ -125,8 +167,12 @@ class ContractSelfChecks(unittest.TestCase):
         steps[2]["terminal-state"] = "registered"
         steps[3]["recovery-point"] = "out/evidence/cr4/backup::" + "d" * 64
         steps[4]["installed-version"] = "0.11.0"
-        steps[5]["new-session"] = {"connectors": ["a", "b", "c", "d"], "routes": [f"/r{i}" for i in range(9)]}
-        steps[6]["new-session"] = {"connectors": ["a", "b", "c", "d"], "routes": [f"/r{i}" for i in range(9)]}
+        session = {
+            "connectors": [{"connector": name, "result": "通过", "evidence-ref": "fixture"} for name in json.loads(_support.MANIFEST.read_text(encoding="utf-8"))["dependencies"]["connectors"]],
+            "routes": [{"route": route, "skill": skill, "result": "通过", "evidence-ref": "fixture"} for route, skill in _support.NINE_PAIRS],
+        }
+        steps[5]["new-session"] = copy.deepcopy(session)
+        steps[6]["new-session"] = copy.deepcopy(session)
         items = [{
             "rdy-id": rdy, "item": "i", "method": "m", "found": "ok", "conclusion": "通过",
             "blocking-scope": "none", "evidence-ref": "out/evidence/cr4/d.json::" + "e" * 64,
@@ -150,6 +196,68 @@ class ContractSelfChecks(unittest.TestCase):
         self.assertTrue(closeout_problems(broken, verify=False))
         failed = {**block, "closeout": {**block["closeout"], "reinstall": {**block["closeout"]["reinstall"], "steps": [{**block["closeout"]["reinstall"]["steps"][0], "result": "失败"}]}}}
         self.assertTrue(closeout_problems(failed, verify=False))
+
+    def _verified_passing(self, root: Path) -> dict:
+        """Synthetic receipts only; never saved in the repository acceptance ledger."""
+        block = self._passing()
+        base = root / "out/evidence/cr4"
+        base.mkdir(parents=True)
+        target = base / "fixture.json"
+        target.write_text('{"fixture": true}', encoding="utf-8")
+        digest = hashlib.sha256(target.read_bytes()).hexdigest()
+        ref = "out/evidence/cr4/fixture.json::" + digest
+        for container in (block["closeout"]["reinstall"], block["closeout"]["readiness"]):
+            container["evidence-ref"] = ref
+        for step in block["closeout"]["reinstall"]["steps"]:
+            step["evidence-ref"] = ref
+            if "recovery-point" in step:
+                step["recovery-point"] = ref
+            for run in step.get("export-runs", []):
+                run["files"] = [{"path": "out/evidence/cr4/fixture.json", "sha256": digest}]
+            for kind, entries in step.get("new-session", {}).items():
+                for index, entry in enumerate(entries):
+                    receipt = base / f'{step["rin-id"]}-{kind}-{index}.json'
+                    receipt.write_text(json.dumps({k: v for k, v in entry.items() if k != "evidence-ref"}), encoding="utf-8")
+                    entry["evidence-ref"] = f'out/evidence/cr4/{receipt.name}::{hashlib.sha256(receipt.read_bytes()).hexdigest()}'
+        for item in block["closeout"]["readiness"]["items"]:
+            item["evidence-ref"] = ref
+        return block
+
+    def test_aggregate_refs_are_verified_at_closeout_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.object(_support, "ROOT", Path(tmp)):
+            block = self._verified_passing(Path(tmp))
+            self.assertEqual(closeout_problems(block), [])
+            for key in ("reinstall", "readiness"):
+                for ref in ("out/evidence/cr4/missing.json::" + "0" * 64, "out/evidence/cr4/fixture.json::" + "0" * 64):
+                    bad = copy.deepcopy(block)
+                    bad["closeout"][key]["evidence-ref"] = ref
+                    self.assertTrue(any(f"{key}.evidence-ref" in p for p in closeout_problems(bad)))
+
+    def test_connector_route_identity_and_item_success_at_closeout_entry(self) -> None:
+        block = self._passing()
+        for step_index, kind in ((5, "connectors"), (5, "routes"), (6, "routes")):
+            for mutation in ("duplicate", "identity", "failure"):
+                bad = copy.deepcopy(block)
+                entries = bad["closeout"]["reinstall"]["steps"][step_index]["new-session"][kind]
+                if mutation == "duplicate":
+                    entries[:] = [entries[0]] * len(entries)
+                elif mutation == "identity":
+                    entries[0]["connector" if kind == "connectors" else "route"] = "not-declared"
+                else:
+                    entries[0]["result"] = "失败"
+                self.assertTrue(closeout_problems(bad, verify=False), (step_index, kind, mutation))
+        with tempfile.TemporaryDirectory() as tmp, patch.object(_support, "ROOT", Path(tmp)):
+            verified = self._verified_passing(Path(tmp))
+            entry = verified["closeout"]["reinstall"]["steps"][5]["new-session"]["connectors"][0]
+            receipt = Path(tmp) / entry["evidence-ref"].split("::")[0]
+            receipt.write_text(json.dumps({"connector": entry["connector"], "result": "失败"}), encoding="utf-8")
+            entry["evidence-ref"] = str(receipt.relative_to(Path(tmp))).replace("\\", "/") + "::" + hashlib.sha256(receipt.read_bytes()).hexdigest()
+            self.assertTrue(closeout_problems(verified))
+
+    def test_no_blocking_license_is_valid(self) -> None:
+        block = self._passing()
+        block["closeout"]["readiness"]["items"][3]["conclusion"] = "无阻塞"
+        self.assertEqual(closeout_problems(block, verify=False), [])
 
     def test_intermediate_nine_pass_without_reinstall(self) -> None:
         block = self._passing()

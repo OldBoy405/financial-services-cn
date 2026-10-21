@@ -18,13 +18,6 @@ REQUIRED = {
     "C4-05": ({"XLSX"}, {"DOCX", "PPTX"}),
     "C4-06": ({"MD", "DOCX"},),
 }
-EXPECTED_GROUPS = {
-    "C4-02": {"sheet-create": {"new-xlsx"}},
-    "C4-05": {"document-output": {"docx", "pptx"}, "sheet-create": {"new-xlsx"}},
-    "M1-01": {"docx-output": {"docx"}},
-    "M1-02": {"sheet-edit": {"existing-model"}},
-    "M1-03": {"docx-output": {"docx"}, "sheet-create": {"new-xlsx"}, "chart-output": {"chart"}},
-}
 TOOL_BY_ROUTE = {
     "existing-model": "tencent-docs-sheetagent",
     "new-xlsx": "tencent-docs-sheet-generation",
@@ -114,12 +107,8 @@ def tool_group_problems(group: dict, label: str, verify: bool = True) -> list[st
 def requirement_problems(requirement: dict, slot: dict | None = None, verify: bool = True) -> list[str]:
     problems: list[str] = []
     groups = {group.get("capability"): group for group in requirement.get("required-tools") or []}
-    expected = dict(EXPECTED_GROUPS.get(requirement.get("slot", ""), {}))
-    if slot and slot.get("research-state") == "通过":
-        kinds = {artifact.get("kind") for artifact in slot.get("artifacts") or []}
-        if "DOCX" in kinds and "docx-output" not in expected:
-            expected["docx-output"] = {"docx"}
-    if expected and (slot is None or slot.get("research-state") == "通过"):
+    expected = _support.c4_tool_groups(requirement.get("slot", ""), slot)
+    if slot is None or slot.get("research-state") == "通过":
         if set(groups) != set(expected):
             problems.append(f"{requirement.get('slot')}: required capability groups differ from the slot contract")
     for capability, group in groups.items():
@@ -164,6 +153,16 @@ class ContractSelfChecks(unittest.TestCase):
         self.assertTrue(requirement_problems(bad, verify=False))
         missing = {**slot, "required-tools": []}
         self.assertTrue(requirement_problems(missing, verify=False))
+
+    def test_sector_docx_uses_document_output_not_a_third_group(self) -> None:
+        slot = {"slot": "C4-05", "research-state": "通过", "artifacts": [self._artifact("DOCX"), self._artifact("XLSX")]}
+        requirement = {"slot": "C4-05", "required-tools": [
+            {"capability": "document-output", "allowed-routes": ["docx", "pptx"], "selected-route": "docx", "selected-tool": "tencent-docx", "accepted": True, "evidence-ref": "fixture"},
+            {"capability": "sheet-create", "allowed-routes": ["new-xlsx"], "selected-route": "new-xlsx", "selected-tool": "tencent-docs-sheet-generation", "accepted": True, "evidence-ref": "fixture"},
+        ]}
+        self.assertEqual(requirement_problems(requirement, slot, verify=False), [])
+        requirement["required-tools"].pop()
+        self.assertTrue(requirement_problems(requirement, slot, verify=False))
 
     def test_artifact_file_verification(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -386,6 +386,10 @@ manifest 已按目标校验器 5.5.6 实际 schema 校正：i18n 字段（displa
 
 本节是 CR-FS-2026-004 六项真实运行与 M1 复核的唯一版本化索引。§6 为 CR3 只读快照；无真实证据的槽位保持 `待测`，本表不预填裁决。
 
+- 条件前置按实际产物/引用登记：C4-03/04/06 选择 DOCX 时加入 `docx-output`；C4-05 的 DOCX 已由 `document-output` 覆盖。产物 `meta.referenced-domains` 列实际引用的数据域；C4-03 引用 `资金/龙虎榜/两融` 时才加入该必需域。请求或负例提到某域不等于产物引用。
+- M1-02 重测须登记真实 CN/EN 正例、负例、独立 `MODEL-COPY`/`XLSX` 与七列 `CHANGELOG`。`model-check.changes` 为按工作表/单元格排序的 `{sheet, cell, before, after}`，公式写 `=...`，须与实物差异及日志前四列一致；`formulas` 与 XLSX 活公式数一致。
+- 更新模型沿用 M1 的 `meta.sheets`、`formula-cells`、`samples`、既有模型路由与 `open-check`。其 `meta.verification-ref` 指向哈希绑定的宿主核验 JSON：`original-before-sha256`、`original-after-sha256` 均等于原件摘要，`updated-sha256` 等于更新件摘要，`reopen`/`recalculate` 均为 `通过`；`samples` 与模型元数据一致，逐项 `{location: 工作表!单元格, expected, actual, result}` 对账实际缓存值。原件、模型、正文与宿主日志仍只存忽略区，不将夹具或自报计数当研究实测。
+
 <!-- cr4-research:start -->
 ```json
 {
@@ -403,7 +407,7 @@ manifest 已按目标校验器 5.5.6 实际 schema 校正：i18n 字段（displa
     "slots": [
       {"slot": "C4-01", "required-domains": [{"id": "筛选", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}, {"id": "公开行情/K线/公告/日历", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}], "required-tools": [], "required-records": []},
       {"slot": "C4-02", "required-domains": [{"id": "公开行情/K线/公告/日历", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}, {"id": "机构财务/公告/事件", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}, {"id": "宏观", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}], "required-tools": [{"capability": "sheet-create", "allowed-routes": ["new-xlsx"], "selected-route": "", "selected-tool": "", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": "", "deviations": []}], "required-records": []},
-      {"slot": "C4-03", "required-domains": [{"id": "公开行情/K线/公告/日历", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}, {"id": "资金/龙虎榜/两融", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}], "required-tools": [], "required-records": []},
+      {"slot": "C4-03", "required-domains": [{"id": "公开行情/K线/公告/日历", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}], "required-tools": [], "required-records": []},
       {"slot": "C4-04", "required-domains": [{"id": "机构财务/公告/事件", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}, {"id": "券商一致预期", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}], "required-tools": [], "required-records": []},
       {"slot": "C4-05", "required-domains": [{"id": "研报评级/目标价/全文", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}, {"id": "公开行情/K线/公告/日历", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}, {"id": "宏观", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}], "required-tools": [{"capability": "document-output", "allowed-routes": ["docx", "pptx"], "selected-route": "", "selected-tool": "", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": "", "deviations": []}, {"capability": "sheet-create", "allowed-routes": ["new-xlsx"], "selected-route": "", "selected-tool": "", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": "", "deviations": []}], "required-records": []},
       {"slot": "C4-06", "required-domains": [{"id": "公开行情/K线/公告/日历", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}, {"id": "机构财务/公告/事件", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}], "required-tools": [], "required-records": [{"id": "用户旧论点文件", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}]},
@@ -433,6 +437,8 @@ manifest 已按目标校验器 5.5.6 实际 schema 校正：i18n 字段（displa
 ## 8. phase-1 收口与就绪记录
 
 本节是九项归一视图、同机重装与发布就绪的唯一汇总。九行 Markdown 表与 JSON `nine-summary` 的 `task`/`current-state` 必须一致。
+
+重装/就绪容器的 `evidence-ref` 与逐项引用一样校验目标及摘要。RIN-C4-06 的 `new-session.connectors` 按 manifest 四个声明标识逐项登记 `{connector, result, evidence-ref}`；RIN-C4-06/07 的 `routes` 按九条既有命令逐项登记 `{route, skill, result, evidence-ref}`。每项仅一次，`result=通过`，哈希绑定的 JSON 回执须含同一身份/技能/结果。RDY-C4-04 的 `conclusion=无阻塞`、`blocking-scope=none` 是合法非阻塞结论，不以包含“阻塞”二字拒绝。
 
 <!-- phase1-closeout:start -->
 ```json

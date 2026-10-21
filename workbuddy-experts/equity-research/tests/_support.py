@@ -760,7 +760,7 @@ C4_OFFICE_MEMBERS = {
 C4_REQUIRED_DEPENDENCIES = {
     "C4-01": ({"筛选", "公开行情/K线/公告/日历"}, set(), set()),
     "C4-02": ({"公开行情/K线/公告/日历", "机构财务/公告/事件", "宏观"}, {"sheet-create"}, set()),
-    "C4-03": ({"公开行情/K线/公告/日历", "资金/龙虎榜/两融"}, set(), set()),
+    "C4-03": ({"公开行情/K线/公告/日历"}, set(), set()),
     "C4-04": ({"机构财务/公告/事件", "券商一致预期"}, set(), set()),
     "C4-05": ({"研报评级/目标价/全文", "公开行情/K线/公告/日历", "宏观"}, {"document-output", "sheet-create"}, set()),
     "C4-06": ({"公开行情/K线/公告/日历", "机构财务/公告/事件"}, set(), {"用户旧论点文件"}),
@@ -808,6 +808,36 @@ def c4_m1(block: dict, m1_slot: str) -> dict:
     return matches[0]
 
 
+C4_TOOL_GROUPS = {
+    "C4-02": {"sheet-create": {"new-xlsx"}},
+    "C4-05": {"document-output": {"docx", "pptx"}, "sheet-create": {"new-xlsx"}},
+    "M1-01": {"docx-output": {"docx"}},
+    "M1-02": {"sheet-edit": {"existing-model"}},
+    "M1-03": {"docx-output": {"docx"}, "sheet-create": {"new-xlsx"}, "chart-output": {"chart"}},
+}
+
+
+def c4_tool_groups(slot_id: str, slot: dict | None = None) -> dict[str, set[str]]:
+    groups = dict(C4_TOOL_GROUPS.get(slot_id, {}))
+    if slot_id in ("C4-03", "C4-04", "C4-06") and any(a.get("kind") == "DOCX" for a in (slot or {}).get("artifacts") or []):
+        groups["docx-output"] = {"docx"}
+    return groups
+
+
+def c4_required_dependencies(slot_id: str, slot: dict | None = None):
+    base = C4_REQUIRED_DEPENDENCIES.get(slot_id)
+    if base is None:
+        return None
+    domains, _, records = base
+    domains = set(domains)
+    # Use artifact citation metadata, not words in a request or a negative case:
+    # asking about a restricted domain does not mean the output cited that domain.
+    referenced = {domain for artifact in (slot or {}).get("artifacts") or [] for domain in (artifact.get("meta") or {}).get("referenced-domains") or []}
+    if slot_id == "C4-03" and "资金/龙虎榜/两融" in referenced:
+        domains.add("资金/龙虎榜/两融")
+    return domains, set(c4_tool_groups(slot_id, slot)), records
+
+
 def c4_slot_eligible(c4_block: dict, slot_id: str) -> bool:
     """Common prerequisites plus the slot's declared dependency sets must be present and accepted."""
     common = (c4_block.get("prerequisites") or {}).get("common") or {}
@@ -817,7 +847,8 @@ def c4_slot_eligible(c4_block: dict, slot_id: str) -> bool:
         (row for row in ((c4_block.get("prerequisites") or {}).get("slots") or []) if row.get("slot") == slot_id),
         None,
     )
-    expected = C4_REQUIRED_DEPENDENCIES.get(slot_id)
+    slot = next((s for s in c4_block.get("slots") or [] if s.get("slot") == slot_id), None)
+    expected = c4_required_dependencies(slot_id, slot)
     if requirement is None or expected is None:
         return False
     expected_domains, expected_tools, expected_records = expected
