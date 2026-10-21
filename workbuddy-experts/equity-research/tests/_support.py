@@ -15,6 +15,7 @@ import subprocess
 import unittest
 import zipfile
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[3]
 EXP = ROOT / "workbuddy-experts" / "equity-research"
@@ -751,6 +752,22 @@ C4_CONDITIONAL_PREFIXES = (
     "plugins/vertical-plugins/equity-research/commands/thesis.md",
 )
 C4_ZIP_KINDS = ("DOCX", "XLSX", "PPTX", "ZIP")
+C4_OFFICE_MEMBERS = {
+    "DOCX": ("[Content_Types].xml", "word/document.xml"),
+    "XLSX": ("[Content_Types].xml", "xl/workbook.xml"),
+    "PPTX": ("[Content_Types].xml", "ppt/presentation.xml"),
+}
+C4_REQUIRED_DEPENDENCIES = {
+    "C4-01": ({"筛选", "公开行情/K线/公告/日历"}, set(), set()),
+    "C4-02": ({"公开行情/K线/公告/日历", "机构财务/公告/事件", "宏观"}, {"sheet-create"}, set()),
+    "C4-03": ({"公开行情/K线/公告/日历", "资金/龙虎榜/两融"}, set(), set()),
+    "C4-04": ({"机构财务/公告/事件", "券商一致预期"}, set(), set()),
+    "C4-05": ({"研报评级/目标价/全文", "公开行情/K线/公告/日历", "宏观"}, {"document-output", "sheet-create"}, set()),
+    "C4-06": ({"公开行情/K线/公告/日历", "机构财务/公告/事件"}, set(), {"用户旧论点文件"}),
+    "M1-01": ({"机构财务/公告/事件"}, {"docx-output"}, {"m1-prior"}),
+    "M1-02": ({"机构财务/公告/事件"}, {"sheet-edit"}, {"m1-prior", "用户既有模型"}),
+    "M1-03": ({"公开行情/K线/公告/日历", "机构财务/公告/事件"}, {"docx-output", "sheet-create", "chart-output"}, {"m1-prior"}),
+}
 
 
 def c4_section6_sha256(text: str) -> str:
@@ -792,7 +809,7 @@ def c4_m1(block: dict, m1_slot: str) -> dict:
 
 
 def c4_slot_eligible(c4_block: dict, slot_id: str) -> bool:
-    """Common prerequisites plus this slot's own domains/tools/records must all be accepted."""
+    """Common prerequisites plus the slot's declared dependency sets must be present and accepted."""
     common = (c4_block.get("prerequisites") or {}).get("common") or {}
     if not all((common.get(key) or {}).get("accepted") is True for key in ("cr1-baseline", "cr2-authorization-framework", "package-baseline")):
         return False
@@ -800,13 +817,20 @@ def c4_slot_eligible(c4_block: dict, slot_id: str) -> bool:
         (row for row in ((c4_block.get("prerequisites") or {}).get("slots") or []) if row.get("slot") == slot_id),
         None,
     )
-    if requirement is None:
+    expected = C4_REQUIRED_DEPENDENCIES.get(slot_id)
+    if requirement is None or expected is None:
         return False
-    for key in ("required-domains", "required-tools", "required-records"):
-        for item in requirement.get(key) or []:
-            if item.get("accepted") is not True:
-                return False
-    return True
+    expected_domains, expected_tools, expected_records = expected
+    domains = requirement.get("required-domains") or []
+    records = requirement.get("required-records") or []
+    tools = requirement.get("required-tools") or []
+    if {item.get("id") for item in domains} != expected_domains:
+        return False
+    if {item.get("id") for item in records} != expected_records:
+        return False
+    if {item.get("capability") for item in tools} != expected_tools:
+        return False
+    return all(item.get("accepted") is True for item in domains + records + tools)
 
 
 def c4_check_ref(ref: object, label: str) -> list[str]:
@@ -838,8 +862,26 @@ def c4_check_artifact(artifact: dict, label: str) -> list[str]:
         problems.append(f"{label}: sha256 mismatch")
     if path.stat().st_size != artifact.get("bytes"):
         problems.append(f"{label}: bytes mismatch")
-    if artifact.get("kind") in C4_ZIP_KINDS and not zipfile.is_zipfile(path):
-        problems.append(f"{label}: {artifact.get('kind')} is not a readable ZIP container")
+    if artifact.get("kind") in C4_ZIP_KINDS:
+        kind = artifact.get("kind")
+        try:
+            with zipfile.ZipFile(path) as container:
+                names = set(container.namelist())
+                if kind == "ZIP":
+                    if not names:
+                        problems.append(f"{label}: ZIP container is empty")
+                else:
+                    required = set(C4_OFFICE_MEMBERS.get(kind, ()))
+                    missing = sorted(required - names)
+                    if missing:
+                        problems.append(f"{label}: {kind} is missing members {missing}")
+                    for member in sorted(required & names):
+                        try:
+                            ET.fromstring(container.read(member))
+                        except ET.ParseError:
+                            problems.append(f"{label}: {kind} member {member} is not readable XML")
+        except zipfile.BadZipFile:
+            problems.append(f"{label}: {kind} is not a readable ZIP container")
     return problems
 
 

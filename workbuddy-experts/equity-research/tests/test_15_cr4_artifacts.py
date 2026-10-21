@@ -29,6 +29,8 @@ TOOL_BY_ROUTE = {
     "existing-model": "tencent-docs-sheetagent",
     "new-xlsx": "tencent-docs-sheet-generation",
     "docx": "tencent-docx",
+    "pptx": "tencent-docs-routing",
+    "chart": "matplotlib-fallback",
 }
 
 
@@ -82,7 +84,7 @@ def slot_artifact_problems(slot: dict, verify: bool = True) -> list[str]:
     return problems
 
 
-def tool_group_problems(group: dict, label: str) -> list[str]:
+def tool_group_problems(group: dict, label: str, verify: bool = True) -> list[str]:
     problems: list[str] = []
     allowed = set(group.get("allowed-routes") or [])
     selected = group.get("selected-route") or ""
@@ -96,29 +98,39 @@ def tool_group_problems(group: dict, label: str) -> list[str]:
             problems.append(f"{label}: selected-tool is required")
         if selected in TOOL_BY_ROUTE and tool != TOOL_BY_ROUTE[selected]:
             problems.append(f"{label}: {selected} must use {TOOL_BY_ROUTE[selected]}")
-        if selected in ("pptx", "chart") and ("sheet-generation" in tool or not tool):
-            problems.append(f"{label}: {selected} needs its own verified tool route")
+        if not group.get("evidence-ref"):
+            problems.append(f"{label}: evidence-ref is required for an accepted group")
+        elif verify:
+            problems += _support.c4_check_ref(group.get("evidence-ref"), f"{label}.evidence-ref")
     if group.get("capability") == "sheet-edit" and "new-xlsx" in allowed:
         problems.append(f"{label}: sheet-edit may not accept new-xlsx")
+    for deviation in group.get("deviations") or []:
+        for key in ("requirement", "actual", "reason", "user-confirmed", "retest-ref"):
+            if not deviation.get(key):
+                problems.append(f"{label}.deviation: missing {key}")
     return problems
 
 
-def requirement_problems(slot: dict) -> list[str]:
+def requirement_problems(requirement: dict, slot: dict | None = None, verify: bool = True) -> list[str]:
     problems: list[str] = []
-    groups = {group.get("capability"): group for group in slot.get("required-tools") or []}
-    expected = EXPECTED_GROUPS.get(slot.get("slot", ""))
-    if expected and slot.get("research-state") == "通过":
+    groups = {group.get("capability"): group for group in requirement.get("required-tools") or []}
+    expected = dict(EXPECTED_GROUPS.get(requirement.get("slot", ""), {}))
+    if slot and slot.get("research-state") == "通过":
+        kinds = {artifact.get("kind") for artifact in slot.get("artifacts") or []}
+        if "DOCX" in kinds and "docx-output" not in expected:
+            expected["docx-output"] = {"docx"}
+    if expected and (slot is None or slot.get("research-state") == "通过"):
         if set(groups) != set(expected):
-            problems.append(f"{slot.get('slot')}: required capability groups differ from the slot contract")
+            problems.append(f"{requirement.get('slot')}: required capability groups differ from the slot contract")
     for capability, group in groups.items():
-        problems += tool_group_problems(group, f"{slot.get('slot')}.{capability}")
-        if expected and capability in expected and set(group.get("allowed-routes") or []) != expected[capability]:
-            problems.append(f"{slot.get('slot')}.{capability}: allowed-routes differ from the slot contract")
-        if expected and slot.get("research-state") == "通过" and group.get("accepted") is not True:
-            problems.append(f"{slot.get('slot')}.{capability}: 通过 requires accepted=true")
-    for capability in expected or {}:
+        problems += tool_group_problems(group, f"{requirement.get('slot')}.{capability}", verify)
+        if capability in expected and set(group.get("allowed-routes") or []) != expected[capability]:
+            problems.append(f"{requirement.get('slot')}.{capability}: allowed-routes differ from the slot contract")
+        if slot and slot.get("research-state") == "通过" and group.get("accepted") is not True:
+            problems.append(f"{requirement.get('slot')}.{capability}: 通过 requires accepted=true")
+    for capability in expected:
         if capability not in groups:
-            problems.append(f"{slot.get('slot')}: missing capability {capability}")
+            problems.append(f"{requirement.get('slot')}: missing capability {capability}")
     return problems
 
 
@@ -145,13 +157,13 @@ class ContractSelfChecks(unittest.TestCase):
 
     def test_tool_capability_gate(self) -> None:
         slot = {"slot": "M1-02", "research-state": "通过", "required-tools": [
-            {"capability": "sheet-edit", "allowed-routes": ["existing-model"], "selected-route": "existing-model", "selected-tool": "tencent-docs-sheetagent", "accepted": True}
+            {"capability": "sheet-edit", "allowed-routes": ["existing-model"], "selected-route": "existing-model", "selected-tool": "tencent-docs-sheetagent", "accepted": True, "evidence-ref": "out/evidence/cr4/g.json::" + "a" * 64}
         ]}
-        self.assertEqual(requirement_problems(slot), [])
+        self.assertEqual(requirement_problems(slot, verify=False), [])
         bad = {**slot, "required-tools": [{**slot["required-tools"][0], "selected-tool": "tencent-docs-sheet-generation"}]}
-        self.assertTrue(requirement_problems(bad))
+        self.assertTrue(requirement_problems(bad, verify=False))
         missing = {**slot, "required-tools": []}
-        self.assertTrue(requirement_problems(missing))
+        self.assertTrue(requirement_problems(missing, verify=False))
 
     def test_artifact_file_verification(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -179,9 +191,10 @@ class RepositoryContract(RepoTest):
 
     def test_tool_capability_groups(self) -> None:
         c4 = read_json_block(ACCEPTANCE, C4_BLOCK)
+        slots = {slot.get("slot"): slot for slot in c4.get("slots") or []}
         problems: list[str] = []
-        for slot in (c4.get("prerequisites") or {}).get("slots") or []:
-            problems += requirement_problems(slot)
+        for requirement in (c4.get("prerequisites") or {}).get("slots") or []:
+            problems += requirement_problems(requirement, slots.get(requirement.get("slot")), verify=True)
         self.assertEqual(problems, [], "\n".join(problems))
 
     def test_all_slots_have_required_records(self) -> None:

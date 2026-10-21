@@ -77,6 +77,8 @@ def slot_matrix_problems(slot: dict, verify: bool = True) -> list[str]:
         problems.append(f"{slot.get('slot')}: applicable negative cases must result=通过")
     if not any(case.get("branch") for case in negatives):
         problems.append(f"{slot.get('slot')}: 通过 requires at least one failure branch")
+    if any(case.get("branch") and case.get("branch") not in BRANCHES for case in negatives):
+        problems.append(f"{slot.get('slot')}: failure branch is not in the approved enum")
     present = {case.get("type") for case in negatives if case.get("applicable", True)}
     for negative_type in REQUIRED_NEGATIVES[slot.get("slot", "")]:
         if negative_type not in present:
@@ -92,7 +94,7 @@ def slot_matrix_problems(slot: dict, verify: bool = True) -> list[str]:
     return problems
 
 
-def collection_problems(c4: dict) -> list[str]:
+def collection_problems(c4: dict, verify: bool = True) -> list[str]:
     problems: list[str] = []
     slots = c4.get("slots") or []
     if len(slots) != 6:
@@ -113,12 +115,15 @@ def collection_problems(c4: dict) -> list[str]:
         problems.append("cross-slot-cases must contain exactly C4-US-01")
     else:
         case = us_cases[0]
+        problems += _case_problems(case, "C4-US-01", verify)
         if case.get("market") != "美股公开面":
             problems.append("C4-US-01 must be 美股公开面")
         if case.get("result") != "通过":
             problems.append("C4-US-01 must be an actual positive case")
         if "不接入美系机构数据源" not in (case.get("response-summary") or ""):
             problems.append("C4-US-01 must declare public-only US coverage")
+        if any(term in (case.get("response-summary") or "") for term in ("目标价", "评级", "一致预期")):
+            problems.append("C4-US-01 must not claim institutional-data results")
     seen = set()
     for slot in slots:
         for case in (slot.get("positive-cases") or []) + (slot.get("negative-cases") or []):
@@ -160,9 +165,11 @@ class ContractSelfChecks(unittest.TestCase):
     def test_collection_branch_and_us_gate(self) -> None:
         slot = self._passing_slot()
         c4 = {"slots": [slot] * 6, "cross-slot-cases": []}
-        self.assertTrue(collection_problems(c4))
-        c4["cross-slot-cases"] = [{"case-id": "C4-US-01", "market": "美股公开面", "result": "通过", "response-summary": "仅公开面，不接入美系机构数据源"}]
-        self.assertTrue(collection_problems(c4))
+        self.assertTrue(collection_problems(c4, verify=False))
+        c4["cross-slot-cases"] = [{"case-id": "C4-US-01", "market": "美股公开面", "result": "通过", "language": "zh-CN", "session-record": "out/evidence/cr4/us.json::" + "d" * 64, "expected": "公开面，无机构数据", "actual": "公开面", "response-summary": "仅公开面，不接入美系机构数据源"}]
+        self.assertTrue(collection_problems(c4, verify=False))
+        c4["cross-slot-cases"] = [{"case-id": "C4-US-01", "market": "美股公开面", "result": "通过"}]
+        self.assertTrue(collection_problems(c4, verify=False))
 
 
 class RepositoryContract(RepoTest):

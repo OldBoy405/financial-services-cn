@@ -47,6 +47,11 @@ def m1_record_problems(row: dict, verify: bool = True) -> list[str]:
             problems.append(f"{row.get('m1-slot')}: carry-forward requires prior.adjudication-ref")
         if not prior.get("evidence-refs"):
             problems.append(f"{row.get('m1-slot')}: carry-forward requires prior.evidence-refs")
+        if verify:
+            if prior.get("adjudication-ref"):
+                problems += c4_check_ref(prior.get("adjudication-ref"), f"{row.get('m1-slot')}.prior.adjudication-ref")
+            for ref in prior.get("evidence-refs") or []:
+                problems += c4_check_ref(ref, f"{row.get('m1-slot')}.prior.evidence-refs")
         if row.get("impact") != "unchanged":
             problems.append(f"{row.get('m1-slot')}: carry-forward requires impact=unchanged")
     elif mode == "retest":
@@ -82,12 +87,22 @@ def m1_record_problems(row: dict, verify: bool = True) -> list[str]:
     for standard in standards:
         if not all(standard.get(key) for key in ("criterion", "evidence-ref", "result")):
             problems.append(f"{row.get('m1-slot')}: incomplete original-standard-check row")
+        elif standard.get("result") != "通过":
+            problems.append(f"{row.get('m1-slot')}: original-standard-check must be 通过")
+        elif verify:
+            problems += c4_check_ref(standard.get("evidence-ref"), f"{row.get('m1-slot')}.standard.evidence-ref")
     if row.get("m1-slot") == "M1-01":
         checklist = retest.get("quality-checklist") or []
         if len(checklist) != M1_EARNINGS_CHECKLIST_SIZE:
             problems.append("M1-01: quality-checklist must contain eight items")
         if any(not all(item.get(key) for key in ("item", "result", "evidence-ref")) for item in checklist):
             problems.append("M1-01: every checklist item needs item/result/evidence-ref")
+        if any(item.get("result") != "通过" for item in checklist):
+            problems.append("M1-01: every checklist item must be 通过")
+        if verify:
+            for item in checklist:
+                if item.get("evidence-ref"):
+                    problems += c4_check_ref(item.get("evidence-ref"), "M1-01.checklist.evidence-ref")
         kinds = {artifact.get("kind") for artifact in retest.get("artifacts") or []}
         if not {"DOCX", "SUMMARY"} <= kinds:
             problems.append("M1-01: DOCX and SUMMARY artifacts are required")
@@ -95,21 +110,46 @@ def m1_record_problems(row: dict, verify: bool = True) -> list[str]:
         if retest.get("cross-session") is not None:
             problems.append("M1-02: cross-session must stay null")
         check = retest.get("model-check") or {}
-        for key in ("original-sha256", "formulas", "changes", "reopen"):
+        for key in ("original-sha256", "updated-sha256", "formulas", "changes", "reopen"):
             if not check.get(key):
                 problems.append(f"M1-02: model-check.{key} is required")
+        if check.get("original-sha256") == check.get("updated-sha256"):
+            problems.append("M1-02: original and updated model hashes must differ")
+        if not isinstance(check.get("formulas"), int) or check.get("formulas", 0) <= 0:
+            problems.append("M1-02: formulas must be a positive integer")
+        if not isinstance(check.get("changes"), list) or not check.get("changes"):
+            problems.append("M1-02: changes must be a non-empty list")
+        if check.get("reopen") != "通过":
+            problems.append("M1-02: reopen must be 通过")
     if row.get("m1-slot") == "M1-03":
         stages = retest.get("initiate-stages") or []
         if {stage.get("stage") for stage in stages} != {stage for stage, _ in M1_INITIATE_STAGES}:
             problems.append("M1-03: initiate-stages must cover M1-03-T1..T5 exactly")
+        if len({stage.get("case-id") for stage in stages}) != len(stages):
+            problems.append("M1-03: each stage needs an independent case-id")
+        kinds = {artifact.get("kind") for artifact in retest.get("artifacts") or []}
+        if not {"REPORT", "XLSX", "ZIP", "DOCX"} <= kinds:
+            problems.append("M1-03: REPORT/XLSX/ZIP/DOCX artifacts are required")
         for stage in stages:
             for key in ("case-id", "request-summary", "artifact-refs", "result"):
                 if not stage.get(key):
                     problems.append(f"M1-03.{stage.get('stage')}: missing {key}")
+            if stage.get("result") != "通过":
+                problems.append(f"M1-03.{stage.get('stage')}: result must be 通过")
+            if verify:
+                for ref in stage.get("artifact-refs") or []:
+                    problems += c4_check_ref(ref, f"M1-03.{stage.get('stage')}.artifact-ref")
         cross = retest.get("cross-session") or {}
         for key in ("reentry-id", "exit-at", "reentry-at", "provided-artifacts", "stage-located", "confirmation", "final-artifact", "result"):
             if not cross.get(key):
                 problems.append(f"M1-03.cross-session: missing {key}")
+        if cross.get("result") != "通过":
+            problems.append("M1-03.cross-session: result must be 通过")
+        if verify:
+            for ref in cross.get("provided-artifacts") or []:
+                problems += c4_check_ref(ref, "M1-03.cross-session.provided-artifacts")
+            if cross.get("final-artifact"):
+                problems += c4_check_ref(cross.get("final-artifact"), "M1-03.cross-session.final-artifact")
     return problems
 
 
@@ -124,9 +164,9 @@ class ContractSelfChecks(unittest.TestCase):
             "retest": {
                 "positive-cases": [{"case-id": "p", "language": "zh-CN", "market": "A股", "session-record": "x", "expected": "x", "actual": "x", "result": "通过"}],
                 "negative-cases": [],
-                "artifacts": [{"kind": "DOCX"}],
+                "artifacts": [{"kind": kind} for kind in ("REPORT", "XLSX", "ZIP", "DOCX")],
                 "quality-checklist": [],
-                "cross-session": {key: "x" for key in ("reentry-id", "exit-at", "reentry-at", "provided-artifacts", "stage-located", "confirmation", "final-artifact", "result")},
+                "cross-session": {"reentry-id": "x", "exit-at": "x", "reentry-at": "x", "provided-artifacts": ["x"], "stage-located": "x", "confirmation": "x", "final-artifact": "x", "result": "通过"},
                 "initiate-stages": [{"stage": stage, "case-id": f"c-{stage}", "request-summary": "r", "artifact-refs": ["a"], "result": "通过"} for stage, _ in M1_INITIATE_STAGES],
                 "replay": [],
             },

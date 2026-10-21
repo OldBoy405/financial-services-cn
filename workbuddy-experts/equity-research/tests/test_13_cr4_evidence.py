@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import tempfile
 import unittest
@@ -15,6 +16,7 @@ from _support import (
     C4_CLOSEOUT_BLOCK,
     C4_CR,
     C4_M1_SLOTS,
+    C4_REQUIRED_DEPENDENCIES,
     C4_NINE_TASKS,
     C4_SCHEMA_VERSION,
     C4_SECTION6_SHA256,
@@ -42,10 +44,29 @@ SLOT_KEYS = {"slot", "acceptance-slot", "skill", "market-scope", "research-state
 M1_KEYS = {"m1-slot", "acceptance-slot", "skill", "prior", "package-link", "impact", "impact-basis", "path-mode", "original-standard-check", "retest", "adjudication", "evidence-refs", "skill-change"}
 CASE_KEYS = {"case-id", "slot", "language", "market", "input-summary", "response-summary", "session-record", "client-version", "tool-version", "collected-at", "expected", "actual", "result", "evidence-refs", "zero-file", "type", "branch", "applicable", "not-applicable-reason", "adjacent-path"}
 ARTIFACT_KEYS = {"artifact-id", "case-id", "kind", "path", "sha256", "bytes", "generated-by", "open-check", "structural", "content-check", "meta", "deviations"}
+ADJ_KEYS = {"state", "adjudicator", "adjudicated-at", "rationale"}
+MAPPING_KEYS = {"row", "result", "notes"}
+SKILL_CHANGE_KEYS = {"changed", "case-id", "slot", "source-paths", "copy-paths", "wb-custom", "versions", "retested-cases", "verified-package-version", "skill-source-head"}
+PRIOR_KEYS = {"state", "adjudication-ref", "evidence-refs"}
+PACKAGE_LINK_KEYS = {"version", "content-sha256", "skill-source-head"}
+RETEST_KEYS = {"positive-cases", "negative-cases", "artifacts", "quality-checklist", "cross-session", "initiate-stages", "replay", "model-check"}
+CHECKLIST_KEYS = {"item", "result", "evidence-ref"}
+STANDARD_KEYS = {"criterion", "evidence-ref", "result"}
+STAGE_KEYS = {"stage", "case-id", "request-summary", "artifact-refs", "result"}
+CROSS_KEYS = {"reentry-id", "exit-at", "reentry-at", "provided-artifacts", "stage-located", "confirmation", "final-artifact", "result"}
+PREREQ_ITEM_KEYS = {"status", "accepted", "evidence-ref", "checked-at", "checked-by"}
+PREREQ_SLOT_KEYS = {"slot", "required-domains", "required-tools", "required-records"}
+DOMAIN_KEYS = {"id", "status", "accepted", "evidence-ref", "checked-at", "checked-by"}
+TOOL_KEYS = {"capability", "allowed-routes", "selected-route", "selected-tool", "status", "accepted", "evidence-ref", "checked-at", "checked-by", "deviations"}
+CLOSEOUT_DETAIL_KEYS = {"reinstall", "readiness", "final-wording-allowed", "final-wording"}
+RIN_CONTAINER_KEYS = {"status", "evidence-ref", "steps"}
+RDY_CONTAINER_KEYS = {"status", "evidence-ref", "items"}
+DIST_KEYS = {"local-use", "public-distribution", "marketplace"}
+COUNT_KEYS = {"passed", "total"}
 COMMON_KEYS = ("cr1-baseline", "cr2-authorization-framework", "package-baseline")
 FORBIDDEN_KEYS = {"prompt", "response", "api-key", "api_key", "token", "password", "secret", "credential"}
 SENSITIVE_RE = re.compile(r"(-----BEGIN [A-Z ]*PRIVATE KEY-----|api[_-]?key\s*[:=]\s*\S+|bearer\s+[A-Za-z0-9._-]{12,}|\btoken\s*[:=]\s*\S{8,})", re.I)
-ABS_PATH_RE = re.compile(r"(?:^|[\\/])[A-Za-z]:[\\/]|(?:^|[\s\"'])/home/")
+ABS_PATH_RE = re.compile(r"(?:^|[\s\"'(])(?:[A-Za-z]:[\\/]|/(?:home|tmp|Users|var|etc)/)")
 HASH_REF_RE = re.compile(r"^out/evidence/cr4/.+::[0-9a-f]{64}$")
 
 
@@ -118,6 +139,7 @@ def _artifact_problems(artifact: dict, label: str) -> list[str]:
 
 def index_problems(c4: dict, closeout: dict, acceptance_text: str) -> list[str]:
     problems: list[str] = []
+    problems += _walk_problems({"c4": c4, "closeout": closeout}, "index")
     if set(c4) != C4_TOP_KEYS:
         problems.append(f"§7 keys differ: {sorted(set(c4) ^ C4_TOP_KEYS)}")
     if set(closeout) != CLOSEOUT_TOP_KEYS:
@@ -136,8 +158,36 @@ def index_problems(c4: dict, closeout: dict, acceptance_text: str) -> list[str]:
     slot_reqs = (c4.get("prerequisites") or {}).get("slots") or []
     if [row.get("slot") for row in slot_reqs] != [row[0] for row in C4_SLOTS] + [row[0] for row in C4_M1_SLOTS]:
         problems.append("§7 prerequisites.slots is not the nine task rows in order")
+    for row in slot_reqs:
+        slot_id = row.get("slot")
+        problems += _keys_problems(row, PREREQ_SLOT_KEYS, f"prerequisites.{slot_id}")
+        expected = C4_REQUIRED_DEPENDENCIES.get(slot_id)
+        if expected is None:
+            problems.append(f"prerequisites.{slot_id}: unknown slot")
+            continue
+        domains, tools, records = expected
+        if {item.get("id") for item in row.get("required-domains") or []} != domains:
+            problems.append(f"prerequisites.{slot_id}: required-domains differ from the slot contract")
+        if {item.get("id") for item in row.get("required-records") or []} != records:
+            problems.append(f"prerequisites.{slot_id}: required-records differ from the slot contract")
+        if {item.get("capability") for item in row.get("required-tools") or []} != tools:
+            problems.append(f"prerequisites.{slot_id}: required-tools differ from the slot contract")
+        for item in row.get("required-domains") or []:
+            problems += _keys_problems(item, DOMAIN_KEYS, f"prerequisites.{slot_id}.domain")
+            problems += _walk_problems(item, f"prerequisites.{slot_id}.domain")
+        for item in row.get("required-records") or []:
+            problems += _keys_problems(item, DOMAIN_KEYS, f"prerequisites.{slot_id}.record")
+        for item in row.get("required-tools") or []:
+            problems += _keys_problems(item, TOOL_KEYS, f"prerequisites.{slot_id}.tool")
+            problems += _walk_problems(item, f"prerequisites.{slot_id}.tool")
     for slot in c4.get("slots") or []:
         problems += _keys_problems(slot, SLOT_KEYS, f"{slot.get('slot')}")
+        problems += _keys_problems(slot.get("adjudication"), ADJ_KEYS, f"{slot.get('slot')}.adjudication")
+        problems += _keys_problems(slot.get("mapping-check"), MAPPING_KEYS, f"{slot.get('slot')}.mapping-check")
+        problems += _keys_problems(slot.get("skill-change"), SKILL_CHANGE_KEYS, f"{slot.get('slot')}.skill-change")
+        problems += _walk_problems(slot.get("adjudication"), f"{slot.get('slot')}.adjudication")
+        problems += _walk_problems(slot.get("mapping-check"), f"{slot.get('slot')}.mapping-check")
+        problems += _walk_problems(slot.get("skill-change"), f"{slot.get('slot')}.skill-change")
         if slot.get("research-state") not in C4_STATES:
             problems.append(f"{slot.get('slot')}: invalid research-state")
         if (slot.get("adjudication") or {}).get("state") != slot.get("research-state"):
@@ -154,6 +204,27 @@ def index_problems(c4: dict, closeout: dict, acceptance_text: str) -> list[str]:
             problems.append("C4-US-01 must be 美股公开面")
     for row in c4.get("m1-recheck") or []:
         problems += _keys_problems(row, M1_KEYS, str(row.get("m1-slot")))
+        problems += _keys_problems(row.get("prior"), PRIOR_KEYS, f"{row.get('m1-slot')}.prior")
+        problems += _keys_problems(row.get("package-link"), PACKAGE_LINK_KEYS, f"{row.get('m1-slot')}.package-link")
+        problems += _keys_problems(row.get("adjudication"), ADJ_KEYS, f"{row.get('m1-slot')}.adjudication")
+        problems += _keys_problems(row.get("skill-change"), SKILL_CHANGE_KEYS, f"{row.get('m1-slot')}.skill-change")
+        problems += _walk_problems(row.get("prior"), f"{row.get('m1-slot')}.prior")
+        problems += _walk_problems(row.get("package-link"), f"{row.get('m1-slot')}.package-link")
+        problems += _walk_problems(row.get("adjudication"), f"{row.get('m1-slot')}.adjudication")
+        problems += _walk_problems(row.get("skill-change"), f"{row.get('m1-slot')}.skill-change")
+        retest = row.get("retest")
+        if isinstance(retest, dict):
+            problems += _keys_problems(retest, RETEST_KEYS, f"{row.get('m1-slot')}.retest")
+            problems += _walk_problems(retest, f"{row.get('m1-slot')}.retest")
+            for item in retest.get("quality-checklist") or []:
+                problems += _keys_problems(item, CHECKLIST_KEYS, f"{row.get('m1-slot')}.checklist")
+            for item in retest.get("initiate-stages") or []:
+                problems += _keys_problems(item, STAGE_KEYS, f"{row.get('m1-slot')}.stage")
+            cross = retest.get("cross-session")
+            if isinstance(cross, dict):
+                problems += _keys_problems(cross, CROSS_KEYS, f"{row.get('m1-slot')}.cross-session")
+        for item in row.get("original-standard-check") or []:
+            problems += _keys_problems(item, STANDARD_KEYS, f"{row.get('m1-slot')}.standard")
         path_mode = row.get("path-mode")
         if path_mode == "carry-forward":
             if (row.get("prior") or {}).get("state") != "通过":
@@ -185,6 +256,11 @@ def index_problems(c4: dict, closeout: dict, acceptance_text: str) -> list[str]:
     if count.get("passed") != sum(1 for row in summary if row.get("counts-toward-9")):
         problems.append("§8 count.passed must equal counts-toward-9 rows")
     flags = closeout.get("closeout") or {}
+    problems += _keys_problems(flags, CLOSEOUT_DETAIL_KEYS, "closeout")
+    problems += _keys_problems(flags.get("reinstall"), RIN_CONTAINER_KEYS, "closeout.reinstall")
+    problems += _keys_problems(flags.get("readiness"), RDY_CONTAINER_KEYS, "closeout.readiness")
+    problems += _keys_problems(closeout.get("distribution"), DIST_KEYS, "distribution")
+    problems += _keys_problems(closeout.get("count"), COUNT_KEYS, "count")
     allowed = bool(
         count.get("passed") == 9
         and ((flags.get("reinstall") or {}).get("status") == "通过")
@@ -248,6 +324,32 @@ class ContractSelfChecks(unittest.TestCase):
         closeout = {"package": {"content-sha256": "a" * 64}, "nine-summary": []}
         self.assertFalse(c4_slot_eligible(c4, "C4-01"))
         self.assertFalse(nine_view(c4, closeout, "screen")["counts-toward-9"])
+
+    def test_eligibility_requires_declared_domain_and_record_sets(self) -> None:
+        domains, tools, records = C4_REQUIRED_DEPENDENCIES["C4-06"]
+        requirement = {
+            "slot": "C4-06",
+            "required-domains": [{"id": item, "accepted": True} for item in domains],
+            "required-tools": [],
+            "required-records": [{"id": item, "accepted": True} for item in records],
+        }
+        c4 = {
+            "prerequisites": {"common": {key: {"accepted": True} for key in COMMON_KEYS}, "slots": [requirement]},
+            "slots": [],
+        }
+        self.assertTrue(c4_slot_eligible(c4, "C4-06"))
+        requirement["required-domains"] = []
+        self.assertFalse(c4_slot_eligible(c4, "C4-06"))
+        requirement["required-domains"] = [{"id": item, "accepted": True} for item in domains]
+        requirement["required-records"] = []
+        self.assertFalse(c4_slot_eligible(c4, "C4-06"))
+
+    def test_nested_scan_is_reached_from_index_entry(self) -> None:
+        c4, closeout = load_blocks()
+        mutated = json.loads(json.dumps(c4))
+        mutated["slots"][0]["adjudication"]["prompt"] = "verbatim"
+        problems = index_problems(mutated, closeout, ACCEPTANCE.read_text(encoding="utf-8"))
+        self.assertTrue(any("forbidden field" in problem for problem in problems))
 
     def test_artifact_verification_rejects_missing_and_bad_hash(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
