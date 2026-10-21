@@ -1063,9 +1063,21 @@ def skills_for_path(path: str) -> set[str]:
         ("plugins/vertical-plugins/equity-research/skills/earnings-analysis/", "earnings-analysis"),
         ("plugins/vertical-plugins/equity-research/skills/model-update/", "model-update"),
         ("plugins/vertical-plugins/equity-research/skills/initiating-coverage/", "initiating-coverage"),
+        ("plugins/vertical-plugins/equity-research/skills/idea-generation/", "idea-generation"),
+        ("plugins/vertical-plugins/equity-research/skills/catalyst-calendar/", "catalyst-calendar"),
+        ("plugins/vertical-plugins/equity-research/skills/morning-note/", "morning-note"),
+        ("plugins/vertical-plugins/equity-research/skills/earnings-preview/", "earnings-preview"),
+        ("plugins/vertical-plugins/equity-research/skills/sector-overview/", "sector-overview"),
+        ("plugins/vertical-plugins/equity-research/skills/thesis-tracker/", "thesis-tracker"),
         ("plugins/vertical-plugins/equity-research/commands/earnings.md", "earnings-analysis"),
         ("plugins/vertical-plugins/equity-research/commands/model-update.md", "model-update"),
         ("plugins/vertical-plugins/equity-research/commands/initiate.md", "initiating-coverage"),
+        ("plugins/vertical-plugins/equity-research/commands/screen.md", "idea-generation"),
+        ("plugins/vertical-plugins/equity-research/commands/catalysts.md", "catalyst-calendar"),
+        ("plugins/vertical-plugins/equity-research/commands/morning-note.md", "morning-note"),
+        ("plugins/vertical-plugins/equity-research/commands/earnings-preview.md", "earnings-preview"),
+        ("plugins/vertical-plugins/equity-research/commands/sector.md", "sector-overview"),
+        ("plugins/vertical-plugins/equity-research/commands/thesis.md", "thesis-tracker"),
         ("plugins/agent-plugins/earnings-reviewer/skills/earnings-analysis/", "earnings-analysis"),
         ("plugins/agent-plugins/earnings-reviewer/skills/model-update/", "model-update"),
     )
@@ -1100,31 +1112,70 @@ def _skill_change_path_registered(path: str, record: dict) -> bool:
     return False
 
 
-def scope_problems(changed: list[str], block: dict) -> list[str]:
-    """Path/trigger layer of SDD §9; the content layer runs separately."""
-    problems = []
-    changed_records = []
+SHARED_SCOPE_FILES = (
+    "plugins/vertical-plugins/equity-research/.claude-plugin/plugin.json",
+    "plugins/agent-plugins/earnings-reviewer/.claude-plugin/plugin.json",
+    "workbuddy-experts/equity-research/.codebuddy-plugin/plugin.json",
+    "workbuddy-experts/equity-research/README.md",
+    "CUSTOM.md",
+)
+
+
+def _record_cases(record: dict) -> list[dict]:
+    cases = _slot_cases(record)
+    retest = record.get("retest")
+    if isinstance(retest, dict):
+        for key in ("positive-cases", "negative-cases"):
+            if isinstance(retest.get(key), list):
+                cases += [case for case in retest[key] if isinstance(case, dict)]
+    return cases
+
+
+def _skill_change_records(block: dict) -> list[tuple[str | None, dict, list[dict]]]:
+    records: list[tuple[str | None, dict, list[dict]]] = []
     for slot in block.get("slots") or []:
         if not isinstance(slot, dict):
             continue
         record = slot.get("skill-change")
         if isinstance(record, dict) and record.get("changed") is True:
-            changed_records.append((slot, record))
+            records.append((slot.get("skill"), record, _record_cases(slot)))
+    for row in block.get("m1-recheck") or []:
+        if not isinstance(row, dict):
+            continue
+        record = row.get("skill-change")
+        if isinstance(record, dict) and record.get("changed") is True:
+            records.append((row.get("skill"), record, _record_cases(row)))
+    return records
+
+
+def current_scope_blocks() -> tuple[dict, dict]:
+    """Read the frozen §6 snapshot and the current CR4 §7 block."""
+    return load_block(), _support.read_json_block(_support.ACCEPTANCE, _support.C4_BLOCK)
+
+
+def scope_problems(changed: list[str], block: dict, current_block: dict | None = None) -> list[str]:
+    """Path/trigger layer of SDD §9; the content layer runs separately."""
+    problems = []
+    records = _skill_change_records(block)
+    if current_block:
+        records += _skill_change_records(current_block)
+    exact = set(M1_SCOPE_EXACT_FILES) | set(_support.C4_SCOPE_EXACT_FILES)
     for path in changed:
         if path in M1_ZERO_DIFF_PATHS or path.startswith(M1_ZERO_DIFF_PREFIXES) or path.startswith("out/"):
             problems.append(f"{path}: zero_diff path must not change")
             continue
-        if path in M1_SCOPE_EXACT_FILES:
+        if path in exact:
             continue
         if not any(_path_matches(path, prefix) for prefix in M1_SCOPE_CONDITIONAL_PREFIXES):
             problems.append(f"{path}: outside the SDD §9 scope_in")
             continue
         skills = skills_for_path(path)
+        shared = path in SHARED_SCOPE_FILES
         accepted = False
-        for slot, record in changed_records:
-            if slot.get("skill") not in skills:
+        for skill, record, cases in records:
+            if not shared and skill not in skills:
                 continue
-            case_ids = {case.get("case-id") for case in _slot_cases(slot)}
+            case_ids = {case.get("case-id") for case in cases}
             if record.get("case-id") not in case_ids:
                 continue
             if not _skill_change_path_registered(path, record):
@@ -1133,8 +1184,9 @@ def scope_problems(changed: list[str], block: dict) -> list[str]:
             break
         if not accepted:
             problems.append(
-                f"{path}: conditional path needs the same slot's skill-change.changed=true with a real case-id "
-                "and path-level registration (source-paths/copy-paths, plugin.json version, CUSTOM row, README row)"
+                f"{path}: conditional path needs a current §7 or historical §6 skill-change.changed=true "
+                "with a real case-id and path-level registration (source-paths/copy-paths, plugin.json version, "
+                "CUSTOM row, README row)"
             )
     return problems
 
@@ -1915,7 +1967,7 @@ class RepositoryContract(RepoTest):
         block = load_block()
         changed = changed_paths()
         self.assertTrue(changed, "no diff against the fixed baseline: nothing to review")
-        self.assertEqual(scope_problems(changed, block), [])
+        self.assertEqual(scope_problems(changed, block, _support.read_json_block(_support.ACCEPTANCE, _support.C4_BLOCK)), [])
         conditional = [path for path in changed if skills_for_path(path)]
         affected = set()
         versions: dict[str, str] = {}
@@ -1956,6 +2008,12 @@ class RepositoryContract(RepoTest):
         self.assertEqual(lines[BASELINE_ACCEPTANCE_LINES], "")
         self.assertEqual(lines[BASELINE_ACCEPTANCE_LINES + 1], APPEND_TITLE)
         self.assertEqual(acceptance_append_problems(controlled_diff("workbuddy-experts/equity-research/ACCEPTANCE.md", 0), prefix, current), [])
+
+    def test_section6_region_is_pinned(self) -> None:
+        self.assertEqual(self._section6_sha256(), _support.C4_SECTION6_SHA256)
+
+    def _section6_sha256(self) -> str:
+        return _support.c4_section6_sha256(ACCEPTANCE.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
