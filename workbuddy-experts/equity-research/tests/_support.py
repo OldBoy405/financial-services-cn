@@ -13,7 +13,9 @@ import re
 import shutil
 import subprocess
 import unittest
+import zipfile
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[3]
 EXP = ROOT / "workbuddy-experts" / "equity-research"
@@ -687,3 +689,295 @@ def m1_tool_record_problems(artifact: dict, expected_routes: tuple[str, ...]) ->
             problems.append("retest open-check-result must be 成功")
         problems += _iso8601_problems(retest.get("checked-at"), "retest.checked-at")
     return problems
+
+
+# ── CR-FS-2026-004 六项与 phase-1 收口证据契约（TASK-01） ──────────────────
+# The CR4 index is append-only: §1–§6 keep their bytes; §7/§8 are new blocks.
+C4_BLOCK = "cr4-research"
+C4_CLOSEOUT_BLOCK = "phase1-closeout"
+C4_CR = "CR-FS-2026-004"
+C4_SCHEMA_VERSION = 1
+C4_CASE_SUMMARY_LIMIT = 400
+C4_BASELINE_ACCEPTANCE_LINES = 282
+C4_SECTION6_TITLE = "## 6. M1 研究证据与裁决记录"
+C4_SECTION7_TITLE = "## 7. 其余六项研究证据与裁决记录"
+C4_STATES = ("待测", "通过", "不通过", "需重测")
+C4_SLOTS = (
+    ("C4-01", "SLOT-04", "idea-generation"),
+    ("C4-02", "SLOT-05", "catalyst-calendar"),
+    ("C4-03", "SLOT-06", "morning-note"),
+    ("C4-04", "SLOT-07", "earnings-preview"),
+    ("C4-05", "SLOT-08", "sector-overview"),
+    ("C4-06", "SLOT-09", "thesis-tracker"),
+)
+C4_M1_SLOTS = (
+    ("M1-01", "SLOT-01", "earnings-analysis"),
+    ("M1-02", "SLOT-03", "model-update"),
+    ("M1-03", "SLOT-02", "initiating-coverage"),
+)
+C4_NINE_TASKS = (
+    "earnings",
+    "initiate",
+    "model-update",
+    "screen",
+    "catalysts",
+    "morning-note",
+    "earnings-preview",
+    "sector",
+    "thesis",
+)
+C4_SECTION6_SHA256 = "bd1f53b460488f4c3fb9fbeb4848fad2fa6096461c7b539f3288cc33f30e1d1a"
+C4_SCOPE_EXACT_FILES = (
+    "workbuddy-experts/equity-research/ACCEPTANCE.md",
+    "workbuddy-experts/equity-research/tests/_support.py",
+    "workbuddy-experts/equity-research/tests/test_08_m1_evidence.py",
+    "workbuddy-experts/equity-research/tests/test_13_cr4_evidence.py",
+    "workbuddy-experts/equity-research/tests/test_14_cr4_matrix.py",
+    "workbuddy-experts/equity-research/tests/test_15_cr4_artifacts.py",
+    "workbuddy-experts/equity-research/tests/test_16_m1_recheck.py",
+    "workbuddy-experts/equity-research/tests/test_17_reinstall_readiness.py",
+)
+C4_CONDITIONAL_PREFIXES = (
+    "plugins/vertical-plugins/equity-research/skills/idea-generation/",
+    "plugins/vertical-plugins/equity-research/skills/catalyst-calendar/",
+    "plugins/vertical-plugins/equity-research/skills/morning-note/",
+    "plugins/vertical-plugins/equity-research/skills/earnings-preview/",
+    "plugins/vertical-plugins/equity-research/skills/sector-overview/",
+    "plugins/vertical-plugins/equity-research/skills/thesis-tracker/",
+    "plugins/vertical-plugins/equity-research/commands/screen.md",
+    "plugins/vertical-plugins/equity-research/commands/catalysts.md",
+    "plugins/vertical-plugins/equity-research/commands/morning-note.md",
+    "plugins/vertical-plugins/equity-research/commands/earnings-preview.md",
+    "plugins/vertical-plugins/equity-research/commands/sector.md",
+    "plugins/vertical-plugins/equity-research/commands/thesis.md",
+)
+C4_ZIP_KINDS = ("DOCX", "XLSX", "PPTX", "ZIP")
+C4_OFFICE_MEMBERS = {
+    "DOCX": ("[Content_Types].xml", "word/document.xml"),
+    "XLSX": ("[Content_Types].xml", "xl/workbook.xml"),
+    "PPTX": ("[Content_Types].xml", "ppt/presentation.xml"),
+}
+C4_REQUIRED_DEPENDENCIES = {
+    "C4-01": ({"筛选", "公开行情/K线/公告/日历"}, set(), set()),
+    "C4-02": ({"公开行情/K线/公告/日历", "机构财务/公告/事件", "宏观"}, {"sheet-create"}, set()),
+    "C4-03": ({"公开行情/K线/公告/日历"}, set(), set()),
+    "C4-04": ({"机构财务/公告/事件", "券商一致预期"}, set(), set()),
+    "C4-05": ({"研报评级/目标价/全文", "公开行情/K线/公告/日历", "宏观"}, {"document-output", "sheet-create"}, set()),
+    "C4-06": ({"公开行情/K线/公告/日历", "机构财务/公告/事件"}, set(), {"用户旧论点文件"}),
+    "M1-01": ({"机构财务/公告/事件"}, {"docx-output"}, {"m1-prior"}),
+    "M1-02": ({"机构财务/公告/事件"}, {"sheet-edit"}, {"m1-prior", "用户既有模型"}),
+    "M1-03": ({"公开行情/K线/公告/日历", "机构财务/公告/事件"}, {"docx-output", "sheet-create", "chart-output"}, {"m1-prior"}),
+}
+
+
+def c4_section6_sha256(text: str) -> str:
+    """Hash the §6 region with one canonical, line-ending-independent rule.
+
+    LF-normalise, slice from the §6 heading (inclusive) to the §7 heading
+    (exclusive; EOF when §7 is absent), trim trailing blank lines, add one
+    trailing LF, then SHA-256 the UTF-8 bytes.  The separator blank line that
+    precedes §7 is therefore trimmed on both sides of the append.
+    """
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    lines = normalized.split("\n")
+    try:
+        start = lines.index(C4_SECTION6_TITLE)
+    except ValueError as exc:
+        raise AssertionError("ACCEPTANCE.md is missing the §6 heading") from exc
+    try:
+        end = lines.index(C4_SECTION7_TITLE, start)
+    except ValueError:
+        end = len(lines)
+    region = lines[start:end]
+    while region and region[-1] == "":
+        region.pop()
+    return hashlib.sha256(("\n".join(region) + "\n").encode("utf-8")).hexdigest()
+
+
+def c4_slot(block: dict, slot_id: str) -> dict:
+    matches = [slot for slot in block.get("slots") or [] if slot.get("slot") == slot_id]
+    if len(matches) != 1:
+        raise AssertionError(f"{slot_id}: expected exactly one slot record, found {len(matches)}")
+    return matches[0]
+
+
+def c4_m1(block: dict, m1_slot: str) -> dict:
+    matches = [row for row in block.get("m1-recheck") or [] if row.get("m1-slot") == m1_slot]
+    if len(matches) != 1:
+        raise AssertionError(f"{m1_slot}: expected exactly one m1-recheck record, found {len(matches)}")
+    return matches[0]
+
+
+C4_TOOL_GROUPS = {
+    "C4-02": {"sheet-create": {"new-xlsx"}},
+    "C4-05": {"document-output": {"docx", "pptx"}, "sheet-create": {"new-xlsx"}},
+    "M1-01": {"docx-output": {"docx"}},
+    "M1-02": {"sheet-edit": {"existing-model"}},
+    "M1-03": {"docx-output": {"docx"}, "sheet-create": {"new-xlsx"}, "chart-output": {"chart"}},
+}
+
+
+def c4_tool_groups(slot_id: str, slot: dict | None = None) -> dict[str, set[str]]:
+    groups = dict(C4_TOOL_GROUPS.get(slot_id, {}))
+    if slot_id in ("C4-03", "C4-04", "C4-06") and any(a.get("kind") == "DOCX" for a in (slot or {}).get("artifacts") or []):
+        groups["docx-output"] = {"docx"}
+    return groups
+
+
+def c4_required_dependencies(slot_id: str, slot: dict | None = None):
+    base = C4_REQUIRED_DEPENDENCIES.get(slot_id)
+    if base is None:
+        return None
+    domains, _, records = base
+    domains = set(domains)
+    # Use artifact citation metadata, not words in a request or a negative case:
+    # asking about a restricted domain does not mean the output cited that domain.
+    referenced = {domain for artifact in (slot or {}).get("artifacts") or [] for domain in (artifact.get("meta") or {}).get("referenced-domains") or []}
+    if slot_id == "C4-03" and "资金/龙虎榜/两融" in referenced:
+        domains.add("资金/龙虎榜/两融")
+    return domains, set(c4_tool_groups(slot_id, slot)), records
+
+
+def c4_slot_eligible(c4_block: dict, slot_id: str) -> bool:
+    """Common prerequisites plus the slot's declared dependency sets must be present and accepted."""
+    common = (c4_block.get("prerequisites") or {}).get("common") or {}
+    if not all((common.get(key) or {}).get("accepted") is True for key in ("cr1-baseline", "cr2-authorization-framework", "package-baseline")):
+        return False
+    requirement = next(
+        (row for row in ((c4_block.get("prerequisites") or {}).get("slots") or []) if row.get("slot") == slot_id),
+        None,
+    )
+    slot = next((s for s in c4_block.get("slots") or [] if s.get("slot") == slot_id), None)
+    expected = c4_required_dependencies(slot_id, slot)
+    if requirement is None or expected is None:
+        return False
+    expected_domains, expected_tools, expected_records = expected
+    domains = requirement.get("required-domains") or []
+    records = requirement.get("required-records") or []
+    tools = requirement.get("required-tools") or []
+    if {item.get("id") for item in domains} != expected_domains:
+        return False
+    if {item.get("id") for item in records} != expected_records:
+        return False
+    if {item.get("capability") for item in tools} != expected_tools:
+        return False
+    return all(item.get("accepted") is True for item in domains + records + tools)
+
+
+def c4_check_ref(ref: object, label: str) -> list[str]:
+    """Verify a `<path>::<sha256>` evidence reference against the real file."""
+    try:
+        path, digest = split_evidence_ref(str(ref))
+    except AssertionError as exc:
+        return [f"{label}: {exc}"]
+    try:
+        actual = sha256_file(path)
+    except AssertionError as exc:
+        return [f"{label}: {exc}"]
+    if actual != digest:
+        return [f"{label}: sha256 mismatch ({actual} != {digest})"]
+    return []
+
+
+def c4_check_artifact(artifact: dict, label: str) -> list[str]:
+    """Verify a standalone artifact path, size, digest and container structure."""
+    problems: list[str] = []
+    try:
+        path = resolve_evidence_path(str(artifact.get("path") or ""))
+    except AssertionError as exc:
+        return [f"{label}: {exc}"]
+    if not path.is_file():
+        return [f"{label}: missing file {path}"]
+    actual = sha256_file(path)
+    if actual != artifact.get("sha256"):
+        problems.append(f"{label}: sha256 mismatch")
+    if path.stat().st_size != artifact.get("bytes"):
+        problems.append(f"{label}: bytes mismatch")
+    if artifact.get("kind") in C4_ZIP_KINDS:
+        kind = artifact.get("kind")
+        try:
+            with zipfile.ZipFile(path) as container:
+                names = set(container.namelist())
+                if kind == "ZIP":
+                    if not names:
+                        problems.append(f"{label}: ZIP container is empty")
+                else:
+                    required = set(C4_OFFICE_MEMBERS.get(kind, ()))
+                    missing = sorted(required - names)
+                    if missing:
+                        problems.append(f"{label}: {kind} is missing members {missing}")
+                    for member in sorted(required & names):
+                        try:
+                            ET.fromstring(container.read(member))
+                        except ET.ParseError:
+                            problems.append(f"{label}: {kind} member {member} is not readable XML")
+        except zipfile.BadZipFile:
+            problems.append(f"{label}: {kind} is not a readable ZIP container")
+    return problems
+
+
+def _c4_adjudication(record: dict) -> tuple[str, str, str]:
+    adjudication = record.get("adjudication") or {}
+    return (
+        adjudication.get("state") or "",
+        adjudication.get("adjudicator") or "",
+        adjudication.get("adjudicated-at") or "",
+    )
+
+
+def nine_view(c4_block: dict, closeout_block: dict, task: str) -> dict:
+    """Project the six C4 slots and three M1 rechecks into the nine-item view."""
+    if task not in C4_NINE_TASKS:
+        raise AssertionError(f"{task}: not one of the nine tasks")
+    if task in ("earnings", "initiate", "model-update"):
+        m1_slot = {"earnings": "M1-01", "model-update": "M1-02", "initiate": "M1-03"}[task]
+        record = c4_m1(c4_block, m1_slot)
+        adj_state, adjudicator, adjudicated_at = _c4_adjudication(record)
+        prior = record.get("prior") or {}
+        if record.get("path-mode") == "carry-forward":
+            state = adj_state or (prior.get("state") or "")
+            carry_ok = prior.get("state") == "通过" and bool(prior.get("adjudication-ref"))
+        else:
+            state = adj_state
+            carry_ok = True
+        package_hash = ((record.get("package-link") or {}).get("content-sha256")) or ""
+        eligible = c4_slot_eligible(c4_block, m1_slot)
+        kind, ref = "m1", f"§7/m1-recheck#{m1_slot}"
+        adjudication_ok = adj_state == "通过"
+    else:
+        slot_id = {
+            "screen": "C4-01",
+            "catalysts": "C4-02",
+            "morning-note": "C4-03",
+            "earnings-preview": "C4-04",
+            "sector": "C4-05",
+            "thesis": "C4-06",
+        }[task]
+        record = c4_slot(c4_block, slot_id)
+        state, adjudicator, adjudicated_at = _c4_adjudication(record)
+        package_hash = ((c4_block.get("package") or {}).get("content-sha256")) or ""
+        eligible = c4_slot_eligible(c4_block, slot_id)
+        kind, ref = "c4", f"§7/slots#{slot_id}"
+        carry_ok = True
+        adjudication_ok = state == "通过"
+    closeout_hash = ((closeout_block.get("package") or {}).get("content-sha256")) or ""
+    counts = bool(
+        adjudication_ok
+        and carry_ok
+        and eligible
+        and state == "通过"
+        and adjudicator
+        and adjudicated_at
+        and package_hash
+        and package_hash == closeout_hash
+    )
+    return {
+        "task": task,
+        "record-kind": kind,
+        "record-ref": ref,
+        "current-state": state,
+        "adjudicator": adjudicator,
+        "adjudicated-at": adjudicated_at,
+        "package-content-sha256": package_hash,
+        "counts-toward-9": counts,
+    }
