@@ -381,3 +381,99 @@ manifest 已按目标校验器 5.5.6 实际 schema 校正：i18n 字段（displa
 }
 ```
 <!-- m1-research:end -->
+
+## 7. 其余六项研究证据与裁决记录
+
+本节是 CR-FS-2026-004 六项真实运行与 M1 复核的唯一版本化索引。§6 为 CR3 只读快照；无真实证据的槽位保持 `待测`，本表不预填裁决。
+
+<!-- cr4-research:start -->
+```json
+{
+  "schema-version": 1,
+  "cr": "CR-FS-2026-004",
+  "recorded-at": "",
+  "package": {"version": "0.11.0", "content-sha256": "", "exported-at": ""},
+  "skill-source-head": "ade55194a9c67ece789523ecda975b0dc3a917e7",
+  "prerequisites": {
+    "common": {
+      "cr1-baseline": {"status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""},
+      "cr2-authorization-framework": {"status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""},
+      "package-baseline": {"status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}
+    },
+    "slots": [
+      {"slot": "C4-01", "required-domains": [{"id": "筛选", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}, {"id": "公开行情/K线/公告/日历", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}], "required-tools": [], "required-records": []},
+      {"slot": "C4-02", "required-domains": [{"id": "公开行情/K线/公告/日历", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}, {"id": "机构财务/公告/事件", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}, {"id": "宏观", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}], "required-tools": [{"capability": "sheet-create", "allowed-routes": ["new-xlsx"], "selected-route": "", "selected-tool": "", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": "", "deviations": []}], "required-records": []},
+      {"slot": "C4-03", "required-domains": [{"id": "公开行情/K线/公告/日历", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}, {"id": "资金/龙虎榜/两融", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}], "required-tools": [], "required-records": []},
+      {"slot": "C4-04", "required-domains": [{"id": "机构财务/公告/事件", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}, {"id": "券商一致预期", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}], "required-tools": [], "required-records": []},
+      {"slot": "C4-05", "required-domains": [{"id": "研报评级/目标价/全文", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}, {"id": "公开行情/K线/公告/日历", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}, {"id": "宏观", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}], "required-tools": [{"capability": "document-output", "allowed-routes": ["docx", "pptx"], "selected-route": "", "selected-tool": "", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": "", "deviations": []}, {"capability": "sheet-create", "allowed-routes": ["new-xlsx"], "selected-route": "", "selected-tool": "", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": "", "deviations": []}], "required-records": []},
+      {"slot": "C4-06", "required-domains": [{"id": "公开行情/K线/公告/日历", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}, {"id": "机构财务/公告/事件", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}], "required-tools": [], "required-records": [{"id": "用户旧论点文件", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}]},
+      {"slot": "M1-01", "required-domains": [{"id": "机构财务/公告/事件", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}], "required-tools": [{"capability": "docx-output", "allowed-routes": ["docx"], "selected-route": "", "selected-tool": "", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": "", "deviations": []}], "required-records": [{"id": "m1-prior", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}]},
+      {"slot": "M1-02", "required-domains": [{"id": "机构财务/公告/事件", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}], "required-tools": [{"capability": "sheet-edit", "allowed-routes": ["existing-model"], "selected-route": "", "selected-tool": "", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": "", "deviations": []}], "required-records": [{"id": "m1-prior", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}, {"id": "用户既有模型", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}]},
+      {"slot": "M1-03", "required-domains": [{"id": "公开行情/K线/公告/日历", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}, {"id": "机构财务/公告/事件", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}], "required-tools": [{"capability": "docx-output", "allowed-routes": ["docx"], "selected-route": "", "selected-tool": "", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": "", "deviations": []}, {"capability": "sheet-create", "allowed-routes": ["new-xlsx"], "selected-route": "", "selected-tool": "", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": "", "deviations": []}, {"capability": "chart-output", "allowed-routes": ["chart"], "selected-route": "", "selected-tool": "", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": "", "deviations": []}], "required-records": [{"id": "m1-prior", "status": "", "accepted": false, "evidence-ref": "", "checked-at": "", "checked-by": ""}]}
+    ]
+  },
+  "slots": [
+    {"slot": "C4-01", "acceptance-slot": "SLOT-04", "skill": "idea-generation", "market-scope": ["A股", "港股"], "research-state": "待测", "adjudication": {"state": "待测", "adjudicator": "", "adjudicated-at": "", "rationale": ""}, "positive-cases": [], "negative-cases": [], "artifacts": [], "mapping-check": {"row": "MR-04", "result": "", "notes": ""}, "skill-change": {"changed": false, "case-id": "", "slot": "C4-01", "source-paths": [], "copy-paths": [], "wb-custom": [], "versions": {}, "retested-cases": []}},
+    {"slot": "C4-02", "acceptance-slot": "SLOT-05", "skill": "catalyst-calendar", "market-scope": ["A股", "港股"], "research-state": "待测", "adjudication": {"state": "待测", "adjudicator": "", "adjudicated-at": "", "rationale": ""}, "positive-cases": [], "negative-cases": [], "artifacts": [], "mapping-check": {"row": "MR-05", "result": "", "notes": ""}, "skill-change": {"changed": false, "case-id": "", "slot": "C4-02", "source-paths": [], "copy-paths": [], "wb-custom": [], "versions": {}, "retested-cases": []}},
+    {"slot": "C4-03", "acceptance-slot": "SLOT-06", "skill": "morning-note", "market-scope": ["A股", "港股"], "research-state": "待测", "adjudication": {"state": "待测", "adjudicator": "", "adjudicated-at": "", "rationale": ""}, "positive-cases": [], "negative-cases": [], "artifacts": [], "mapping-check": {"row": "MR-06", "result": "", "notes": ""}, "skill-change": {"changed": false, "case-id": "", "slot": "C4-03", "source-paths": [], "copy-paths": [], "wb-custom": [], "versions": {}, "retested-cases": []}},
+    {"slot": "C4-04", "acceptance-slot": "SLOT-07", "skill": "earnings-preview", "market-scope": ["A股", "港股"], "research-state": "待测", "adjudication": {"state": "待测", "adjudicator": "", "adjudicated-at": "", "rationale": ""}, "positive-cases": [], "negative-cases": [], "artifacts": [], "mapping-check": {"row": "MR-07", "result": "", "notes": ""}, "skill-change": {"changed": false, "case-id": "", "slot": "C4-04", "source-paths": [], "copy-paths": [], "wb-custom": [], "versions": {}, "retested-cases": []}},
+    {"slot": "C4-05", "acceptance-slot": "SLOT-08", "skill": "sector-overview", "market-scope": ["A股", "港股"], "research-state": "待测", "adjudication": {"state": "待测", "adjudicator": "", "adjudicated-at": "", "rationale": ""}, "positive-cases": [], "negative-cases": [], "artifacts": [], "mapping-check": {"row": "MR-08", "result": "", "notes": ""}, "skill-change": {"changed": false, "case-id": "", "slot": "C4-05", "source-paths": [], "copy-paths": [], "wb-custom": [], "versions": {}, "retested-cases": []}},
+    {"slot": "C4-06", "acceptance-slot": "SLOT-09", "skill": "thesis-tracker", "market-scope": ["A股", "港股"], "research-state": "待测", "adjudication": {"state": "待测", "adjudicator": "", "adjudicated-at": "", "rationale": ""}, "positive-cases": [], "negative-cases": [], "artifacts": [], "mapping-check": {"row": "MR-09", "result": "", "notes": ""}, "skill-change": {"changed": false, "case-id": "", "slot": "C4-06", "source-paths": [], "copy-paths": [], "wb-custom": [], "versions": {}, "retested-cases": []}}
+  ],
+  "cross-slot-cases": [],
+  "m1-recheck": [
+    {"m1-slot": "M1-01", "acceptance-slot": "SLOT-01", "skill": "earnings-analysis", "prior": {"state": "待测", "adjudication-ref": "", "evidence-refs": []}, "package-link": {"version": "", "content-sha256": "", "skill-source-head": ""}, "impact": "retest-required", "impact-basis": "", "path-mode": "retest", "original-standard-check": [], "retest": {"positive-cases": [], "negative-cases": [], "artifacts": [], "quality-checklist": [], "cross-session": null, "initiate-stages": [], "replay": []}, "adjudication": {"state": "待测", "adjudicator": "", "adjudicated-at": "", "rationale": ""}, "evidence-refs": [], "skill-change": {"changed": false, "case-id": "", "slot": "M1-01", "source-paths": [], "copy-paths": [], "wb-custom": [], "versions": {}, "retested-cases": []}},
+    {"m1-slot": "M1-02", "acceptance-slot": "SLOT-03", "skill": "model-update", "prior": {"state": "待测", "adjudication-ref": "", "evidence-refs": []}, "package-link": {"version": "", "content-sha256": "", "skill-source-head": ""}, "impact": "retest-required", "impact-basis": "", "path-mode": "retest", "original-standard-check": [], "retest": {"positive-cases": [], "negative-cases": [], "artifacts": [], "quality-checklist": [], "cross-session": null, "initiate-stages": [], "replay": []}, "adjudication": {"state": "待测", "adjudicator": "", "adjudicated-at": "", "rationale": ""}, "evidence-refs": [], "skill-change": {"changed": false, "case-id": "", "slot": "M1-02", "source-paths": [], "copy-paths": [], "wb-custom": [], "versions": {}, "retested-cases": []}},
+    {"m1-slot": "M1-03", "acceptance-slot": "SLOT-02", "skill": "initiating-coverage", "prior": {"state": "待测", "adjudication-ref": "", "evidence-refs": []}, "package-link": {"version": "", "content-sha256": "", "skill-source-head": ""}, "impact": "retest-required", "impact-basis": "", "path-mode": "retest", "original-standard-check": [], "retest": {"positive-cases": [], "negative-cases": [], "artifacts": [], "quality-checklist": [], "cross-session": null, "initiate-stages": [], "replay": []}, "adjudication": {"state": "待测", "adjudicator": "", "adjudicated-at": "", "rationale": ""}, "evidence-refs": [], "skill-change": {"changed": false, "case-id": "", "slot": "M1-03", "source-paths": [], "copy-paths": [], "wb-custom": [], "versions": {}, "retested-cases": []}}
+  ]
+}
+```
+<!-- cr4-research:end -->
+
+## 8. phase-1 收口与就绪记录
+
+本节是九项归一视图、同机重装与发布就绪的唯一汇总。九行 Markdown 表与 JSON `nine-summary` 的 `task`/`current-state` 必须一致。
+
+<!-- phase1-closeout:start -->
+```json
+{
+  "schema-version": 1,
+  "cr": "CR-FS-2026-004",
+  "recorded-at": "",
+  "package": {"version": "0.11.0", "content-sha256": ""},
+  "nine-summary": [
+    {"task": "earnings", "record-kind": "m1", "record-ref": "§7/m1-recheck#M1-01", "current-state": "待测", "adjudicator": "", "adjudicated-at": "", "package-content-sha256": "", "counts-toward-9": false},
+    {"task": "initiate", "record-kind": "m1", "record-ref": "§7/m1-recheck#M1-03", "current-state": "待测", "adjudicator": "", "adjudicated-at": "", "package-content-sha256": "", "counts-toward-9": false},
+    {"task": "model-update", "record-kind": "m1", "record-ref": "§7/m1-recheck#M1-02", "current-state": "待测", "adjudicator": "", "adjudicated-at": "", "package-content-sha256": "", "counts-toward-9": false},
+    {"task": "screen", "record-kind": "c4", "record-ref": "§7/slots#C4-01", "current-state": "待测", "adjudicator": "", "adjudicated-at": "", "package-content-sha256": "", "counts-toward-9": false},
+    {"task": "catalysts", "record-kind": "c4", "record-ref": "§7/slots#C4-02", "current-state": "待测", "adjudicator": "", "adjudicated-at": "", "package-content-sha256": "", "counts-toward-9": false},
+    {"task": "morning-note", "record-kind": "c4", "record-ref": "§7/slots#C4-03", "current-state": "待测", "adjudicator": "", "adjudicated-at": "", "package-content-sha256": "", "counts-toward-9": false},
+    {"task": "earnings-preview", "record-kind": "c4", "record-ref": "§7/slots#C4-04", "current-state": "待测", "adjudicator": "", "adjudicated-at": "", "package-content-sha256": "", "counts-toward-9": false},
+    {"task": "sector", "record-kind": "c4", "record-ref": "§7/slots#C4-05", "current-state": "待测", "adjudicator": "", "adjudicated-at": "", "package-content-sha256": "", "counts-toward-9": false},
+    {"task": "thesis", "record-kind": "c4", "record-ref": "§7/slots#C4-06", "current-state": "待测", "adjudicator": "", "adjudicated-at": "", "package-content-sha256": "", "counts-toward-9": false}
+  ],
+  "count": {"passed": 0, "total": 9},
+  "closeout": {
+    "reinstall": {"status": "", "evidence-ref": "", "steps": []},
+    "readiness": {"status": "", "evidence-ref": "", "items": []},
+    "final-wording-allowed": false,
+    "final-wording": ""
+  },
+  "distribution": {"local-use": "", "public-distribution": "pending", "marketplace": "not-submitted"},
+  "adjudicator": "",
+  "adjudicated-at": ""
+}
+```
+<!-- phase1-closeout:end -->
+
+| 任务 | 测试日期 | 真实问法摘要 | 市场与期间 | 正例 | 适用负例或不适用理由 | 来源·时效·权限 | 产物与打开记录 | 原命令映射核对 | 当前包与环境关联 | 用户裁决 | 证据定位 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| earnings | — | — | — | — | — | — | — | — | — | 待测 | — |
+| initiate | — | — | — | — | — | — | — | — | — | 待测 | — |
+| model-update | — | — | — | — | — | — | — | — | — | 待测 | — |
+| screen | — | — | — | — | — | — | — | — | — | 待测 | — |
+| catalysts | — | — | — | — | — | — | — | — | — | 待测 | — |
+| morning-note | — | — | — | — | — | — | — | — | — | 待测 | — |
+| earnings-preview | — | — | — | — | — | — | — | — | — | 待测 | — |
+| sector | — | — | — | — | — | — | — | — | — | 待测 | — |
+| thesis | — | — | — | — | — | — | — | — | — | 待测 | — |

@@ -687,3 +687,145 @@ def m1_tool_record_problems(artifact: dict, expected_routes: tuple[str, ...]) ->
             problems.append("retest open-check-result must be 成功")
         problems += _iso8601_problems(retest.get("checked-at"), "retest.checked-at")
     return problems
+
+
+# ── CR-FS-2026-004 六项与 phase-1 收口证据契约（TASK-01） ──────────────────
+# The CR4 index is append-only: §1–§6 keep their bytes; §7/§8 are new blocks.
+C4_BLOCK = "cr4-research"
+C4_CLOSEOUT_BLOCK = "phase1-closeout"
+C4_CR = "CR-FS-2026-004"
+C4_SCHEMA_VERSION = 1
+C4_CASE_SUMMARY_LIMIT = 400
+C4_BASELINE_ACCEPTANCE_LINES = 282
+C4_SECTION6_TITLE = "## 6. M1 研究证据与裁决记录"
+C4_SECTION7_TITLE = "## 7. 其余六项研究证据与裁决记录"
+C4_STATES = ("待测", "通过", "不通过", "需重测")
+C4_SLOTS = (
+    ("C4-01", "SLOT-04", "idea-generation"),
+    ("C4-02", "SLOT-05", "catalyst-calendar"),
+    ("C4-03", "SLOT-06", "morning-note"),
+    ("C4-04", "SLOT-07", "earnings-preview"),
+    ("C4-05", "SLOT-08", "sector-overview"),
+    ("C4-06", "SLOT-09", "thesis-tracker"),
+)
+C4_M1_SLOTS = (
+    ("M1-01", "SLOT-01", "earnings-analysis"),
+    ("M1-02", "SLOT-03", "model-update"),
+    ("M1-03", "SLOT-02", "initiating-coverage"),
+)
+C4_NINE_TASKS = (
+    "earnings",
+    "initiate",
+    "model-update",
+    "screen",
+    "catalysts",
+    "morning-note",
+    "earnings-preview",
+    "sector",
+    "thesis",
+)
+C4_SECTION6_SHA256 = "bd1f53b460488f4c3fb9fbeb4848fad2fa6096461c7b539f3288cc33f30e1d1a"
+C4_SCOPE_EXACT_FILES = (
+    "workbuddy-experts/equity-research/ACCEPTANCE.md",
+    "workbuddy-experts/equity-research/tests/_support.py",
+    "workbuddy-experts/equity-research/tests/test_08_m1_evidence.py",
+    "workbuddy-experts/equity-research/tests/test_13_cr4_evidence.py",
+    "workbuddy-experts/equity-research/tests/test_14_cr4_matrix.py",
+    "workbuddy-experts/equity-research/tests/test_15_cr4_artifacts.py",
+    "workbuddy-experts/equity-research/tests/test_16_m1_recheck.py",
+    "workbuddy-experts/equity-research/tests/test_17_reinstall_readiness.py",
+)
+
+
+def c4_section6_sha256(text: str) -> str:
+    """Hash the §6 region with one canonical, line-ending-independent rule.
+
+    LF-normalise, slice from the §6 heading (inclusive) to the §7 heading
+    (exclusive; EOF when §7 is absent), trim trailing blank lines, add one
+    trailing LF, then SHA-256 the UTF-8 bytes.  The separator blank line that
+    precedes §7 is therefore trimmed on both sides of the append.
+    """
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    lines = normalized.split("\n")
+    try:
+        start = lines.index(C4_SECTION6_TITLE)
+    except ValueError as exc:
+        raise AssertionError("ACCEPTANCE.md is missing the §6 heading") from exc
+    try:
+        end = lines.index(C4_SECTION7_TITLE, start)
+    except ValueError:
+        end = len(lines)
+    region = lines[start:end]
+    while region and region[-1] == "":
+        region.pop()
+    return hashlib.sha256(("\n".join(region) + "\n").encode("utf-8")).hexdigest()
+
+
+def c4_slot(block: dict, slot_id: str) -> dict:
+    matches = [slot for slot in block.get("slots") or [] if slot.get("slot") == slot_id]
+    if len(matches) != 1:
+        raise AssertionError(f"{slot_id}: expected exactly one slot record, found {len(matches)}")
+    return matches[0]
+
+
+def c4_m1(block: dict, m1_slot: str) -> dict:
+    matches = [row for row in block.get("m1-recheck") or [] if row.get("m1-slot") == m1_slot]
+    if len(matches) != 1:
+        raise AssertionError(f"{m1_slot}: expected exactly one m1-recheck record, found {len(matches)}")
+    return matches[0]
+
+
+def _c4_adjudication(record: dict) -> tuple[str, str, str]:
+    adjudication = record.get("adjudication") or {}
+    return (
+        adjudication.get("state") or "",
+        adjudication.get("adjudicator") or "",
+        adjudication.get("adjudicated-at") or "",
+    )
+
+
+def nine_view(c4_block: dict, closeout_block: dict, task: str) -> dict:
+    """Project the six C4 slots and three M1 rechecks into the nine-item view."""
+    if task not in C4_NINE_TASKS:
+        raise AssertionError(f"{task}: not one of the nine tasks")
+    if task in ("earnings", "initiate", "model-update"):
+        m1_slot = {"earnings": "M1-01", "model-update": "M1-02", "initiate": "M1-03"}[task]
+        record = c4_m1(c4_block, m1_slot)
+        if record.get("path-mode") == "carry-forward":
+            prior = record.get("prior") or {}
+            state = prior.get("state") or ""
+            _, adjudicator, adjudicated_at = _c4_adjudication(record)
+        else:
+            state, adjudicator, adjudicated_at = _c4_adjudication(record)
+        package_hash = ((record.get("package-link") or {}).get("content-sha256")) or ""
+        kind, ref = "m1", f"§7/m1-recheck#{m1_slot}"
+    else:
+        slot_id = {
+            "screen": "C4-01",
+            "catalysts": "C4-02",
+            "morning-note": "C4-03",
+            "earnings-preview": "C4-04",
+            "sector": "C4-05",
+            "thesis": "C4-06",
+        }[task]
+        record = c4_slot(c4_block, slot_id)
+        state, adjudicator, adjudicated_at = _c4_adjudication(record)
+        package_hash = ((c4_block.get("package") or {}).get("content-sha256")) or ""
+        kind, ref = "c4", f"§7/slots#{slot_id}"
+    closeout_hash = ((closeout_block.get("package") or {}).get("content-sha256")) or ""
+    counts = bool(
+        state == "通过"
+        and adjudicator
+        and adjudicated_at
+        and package_hash == closeout_hash
+    )
+    return {
+        "task": task,
+        "record-kind": kind,
+        "record-ref": ref,
+        "current-state": state,
+        "adjudicator": adjudicator,
+        "adjudicated-at": adjudicated_at,
+        "package-content-sha256": package_hash,
+        "counts-toward-9": counts,
+    }
